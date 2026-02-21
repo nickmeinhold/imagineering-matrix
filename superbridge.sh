@@ -28,12 +28,13 @@
 #   - Each bridge already connected to its respective platform account
 set -euo pipefail
 
-PI_HOST="nick@raspberrypi"
-PI_DIR="~/matrix"
-SERVER_NAME="imagineering.cc"
-ADMIN_USER="nick"
-ROOM_NAME="Imagineering with Claude Code (Superbridge)"
-ROOM_ALIAS="superbridge"
+# Configuration — override via environment variables or .env file
+PI_HOST="${PI_HOST:-nick@raspberrypi}"
+PI_DIR="${PI_DIR:-\$HOME/matrix}"
+SERVER_NAME="${SERVER_NAME:-imagineering.cc}"
+ADMIN_USER="${ADMIN_USER:-nick}"
+ROOM_NAME="${ROOM_NAME:-Imagineering with Claude Code (Superbridge)}"
+ROOM_ALIAS="${ROOM_ALIAS:-superbridge}"
 
 # Bridge bot usernames (mautrix defaults)
 WHATSAPP_BOT="@whatsappbot:${SERVER_NAME}"
@@ -76,14 +77,16 @@ get_access_token() {
   echo "      -d '{\"type\":\"m.login.password\",\"user\":\"$ADMIN_USER\",\"password\":\"YOUR_PASSWORD\"}'" >&2
   echo >&2
   printf "  Enter access token: " >&2
-  read -r token
+  read -rs token
+  echo >&2
   echo "$token"
 
-  # Save it for future use
-  ssh_pi "echo 'ACCESS_TOKEN=$token' >> $STATE_FILE" 2>/dev/null || true
+  # Save it for future use (restrict permissions)
+  ssh_pi "touch $STATE_FILE && chmod 600 $STATE_FILE && echo 'ACCESS_TOKEN=$token' >> $STATE_FILE" 2>/dev/null || true
 }
 
-# Make an authenticated Matrix API call on the Pi
+# Make an authenticated Matrix API call on the Pi.
+# JSON body is piped via stdin to avoid shell injection through SSH command strings.
 matrix_api() {
   local method="$1"
   local endpoint="$2"
@@ -91,12 +94,16 @@ matrix_api() {
   local token
   token=$(get_access_token)
 
-  local curl_cmd="curl -sf -X $method 'http://localhost:8008$endpoint' -H 'Authorization: Bearer $token' -H 'Content-Type: application/json'"
   if [[ -n "$data" ]]; then
-    curl_cmd="$curl_cmd -d '$data'"
+    echo "$data" | ssh_pi "curl -sf -X '$method' 'http://localhost:8008${endpoint}' \
+      -H 'Authorization: Bearer $token' \
+      -H 'Content-Type: application/json' \
+      -d @-"
+  else
+    ssh_pi "curl -sf -X '$method' 'http://localhost:8008${endpoint}' \
+      -H 'Authorization: Bearer $token' \
+      -H 'Content-Type: application/json'"
   fi
-
-  ssh_pi "$curl_cmd"
 }
 
 # Get saved room ID
@@ -161,8 +168,8 @@ EOF
     error "Failed to create room. Response: $result"
   fi
 
-  # Save state
-  ssh_pi "mkdir -p \$(dirname $STATE_FILE) && echo 'ROOM_ID=$room_id' > $STATE_FILE"
+  # Save state (restrict permissions — file may later hold access token)
+  ssh_pi "mkdir -p \$(dirname $STATE_FILE) && install -m 600 /dev/null $STATE_FILE && echo 'ROOM_ID=$room_id' > $STATE_FILE"
 
   ok "Hub room created: $room_id"
   ok "Alias: #$ROOM_ALIAS:$SERVER_NAME"
@@ -371,7 +378,7 @@ show_status() {
 
   for bot_name in whatsappbot discordbot signalbot telegrambot; do
     local bot_id="@${bot_name}:${SERVER_NAME}"
-    if echo "$members" | python3 -c "import sys,json; d=json.load(sys.stdin); assert '$bot_id' in d.get('joined',{})" 2>/dev/null; then
+    if echo "$members" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if '$bot_id' in d.get('joined',{}) else 1)" 2>/dev/null; then
       ok "$bot_id — joined"
     else
       warn "$bot_id — NOT in room"
