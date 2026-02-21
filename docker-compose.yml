@@ -1,0 +1,69 @@
+services:
+  continuwuity:
+    image: forgejo.ellis.link/continuwuation/continuwuity:latest
+    restart: always
+    ports:
+      - "8008:6167"   # Client API
+    environment:
+      CONTINUWUITY_SERVER_NAME: ${MATRIX_SERVER_NAME}
+      CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
+      CONTINUWUITY_PORT: "6167"
+      CONTINUWUITY_ADDRESS: "0.0.0.0"
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+      CONTINUWUITY_REGISTRATION_TOKEN: ${REGISTRATION_TOKEN}
+      CONTINUWUITY_ALLOW_FEDERATION: "false"
+      CONTINUWUITY_MAX_REQUEST_SIZE: "20971520"
+      CONTINUWUITY_LOG: "info"
+    volumes:
+      - continuwuity_data:/var/lib/continuwuity
+    ulimits:
+      nofile:
+        soft: 1048567
+        hard: 1048567
+    # Note: the Continuwuity image has no shell utilities (curl, wget),
+    # so in-container healthchecks don't work. Bridges retry on their own.
+
+  # Bridges — register each via the admin room after first start:
+  #   !admin appservices register
+  #   <paste registration.yaml contents>
+  # Telegram (Python) requires manual bridge bot registration.
+  # Discord, Signal, WhatsApp (Go) work without extra steps.
+
+  mautrix-telegram:
+    image: dock.mau.dev/mautrix/telegram:latest
+    restart: always
+    volumes:
+      - telegram_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-discord:
+    image: dock.mau.dev/mautrix/discord:latest
+    restart: always
+    volumes:
+      - discord_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-signal:
+    image: dock.mau.dev/mautrix/signal:latest
+    restart: always
+    volumes:
+      - signal_data:/data
+    depends_on:
+      - continuwuity
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    restart: always
+    volumes:
+      - whatsapp_data:/data
+    depends_on:
+      - continuwuity
+
+volumes:
+  continuwuity_data:
+  telegram_data:
+  discord_data:
+  signal_data:
+  whatsapp_data:
