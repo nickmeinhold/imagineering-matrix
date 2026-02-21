@@ -189,6 +189,58 @@ docker run --rm -v matrix_continuwuity_data:/data -v $(pwd):/backup \
 docker compose start continuwuity
 ```
 
+## Superbridge (Cross-Platform Relay)
+
+Bridges all platforms into a **single Matrix room** so messages flow everywhere.
+
+```
+WhatsApp group ──► ┌─────────────────┐ ◄── Discord channel
+                   │  Single Matrix  │
+Signal group  ──►  │     Room        │ ◄── Telegram group
+                   │   (the hub)     │
+                   └─────────────────┘
+                          ▲
+                     Element client
+```
+
+### Setup
+
+```bash
+# Step 1-2: Create hub room + invite bots (automated)
+./superbridge.sh all
+
+# Step 3-5: Plumb each bridge (interactive, from Element)
+./superbridge.sh plumb-discord       # !discord bridge <channel-id>
+./superbridge.sh plumb-telegram      # !tg bridge <chat-id>
+./superbridge.sh plumb-whatsapp      # Experimental
+```
+
+### How plumbing works
+
+- **Discord**: `!discord bridge <channel-id>` in the hub room, then `!discord set-relay` for webhook-based name/avatar relay.
+- **Telegram**: `!tg bridge -<chat-id>` in the hub room. Bot must be admin in the Telegram group.
+- **WhatsApp**: `!wa open <group-jid>` — experimental, may not work with megabridge architecture.
+- **Signal**: Not supported for plumbing. Stays as a separate portal room in the Space.
+
+### Relay mode
+
+Users who've logged into a bridge get full puppeting (messages appear as them). Non-puppeted users' messages go through the bridge bot as `"Name: message"` via relay mode.
+
+### Troubleshooting
+
+- **Bot won't join**: Check appservice registration (`!admin appservices list`) and that the bot user exists.
+- **Message loops**: Each bridge only relays messages from non-native users. If you see echoes, check that relay mode is configured correctly.
+- **Power levels**: Bridge bots need PL 50+ in the hub room. Use `./superbridge.sh invite-bots` or set manually in Element room settings.
+- **Continuwuity bug**: Original Conduit had a bug where puppet users couldn't join rooms. Continuwuity may have fixed this — if plumbing fails, check Continuwuity issue tracker.
+- **State file**: Superbridge state (room ID, access token) stored on Pi at `~/matrix/.superbridge-state`.
+
+### Verification
+
+1. Send from Discord — appears in Matrix, Telegram, (WhatsApp)
+2. Send from Telegram — appears in Discord, Matrix
+3. Send from Element — appears on all bridged platforms
+4. Messages show sender attribution on all platforms
+
 ## Limitations vs Synapse
 
 - No SSO/OIDC support

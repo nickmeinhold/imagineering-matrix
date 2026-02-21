@@ -277,8 +277,14 @@ main() {
     tailscale)
       setup_tailscale
       ;;
+    superbridge)
+      info "Running superbridge setup"
+      local script_dir
+      script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      "${script_dir}/superbridge.sh" "${@:2}"
+      ;;
     *)
-      echo "Usage: $0 [deploy|configure|verify|tailscale]"
+      echo "Usage: $0 [deploy|configure|verify|tailscale|superbridge]"
       exit 1
       ;;
   esac
