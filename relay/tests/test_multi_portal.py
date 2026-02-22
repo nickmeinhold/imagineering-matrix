@@ -63,10 +63,12 @@ class TestPortalToHub:
 
         await on_message(room, event)
 
-        client.room_send.assert_awaited_once()
-        args = client.room_send.await_args
-        assert args[0][0] == HUB_ROOM
-        assert args[1]["content"]["body"] == "**Alice (WhatsApp):** hello from WA"
+        # Hub is among the targets (plus cross-relay to other portals).
+        hub_calls = [
+            c for c in client.room_send.await_args_list if c[0][0] == HUB_ROOM
+        ]
+        assert len(hub_calls) == 1
+        assert hub_calls[0][1]["content"]["body"] == "**Alice (WhatsApp):** hello from WA"
 
     async def test_signal_portal_relays_to_hub(
         self, on_message, client: AsyncMock,
@@ -80,10 +82,12 @@ class TestPortalToHub:
 
         await on_message(room, event)
 
-        client.room_send.assert_awaited_once()
-        args = client.room_send.await_args
-        assert args[0][0] == HUB_ROOM
-        assert args[1]["content"]["body"] == "**Bob (Signal):** hello from Signal"
+        # Hub is among the targets (plus cross-relay to other portals).
+        hub_calls = [
+            c for c in client.room_send.await_args_list if c[0][0] == HUB_ROOM
+        ]
+        assert len(hub_calls) == 1
+        assert hub_calls[0][1]["content"]["body"] == "**Bob (Signal):** hello from Signal"
 
 
 # ---------------------------------------------------------------------------
@@ -284,3 +288,111 @@ class TestFanOutResilience:
 
         # Both portals were attempted.
         assert client.room_send.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Portal → Portal (cross-relay)
+# ---------------------------------------------------------------------------
+
+
+class TestPortalToPortal:
+    """Messages arriving in one portal are cross-relayed to other portals."""
+
+    async def test_signal_portal_cross_relays_to_whatsapp(
+        self, on_message, client: AsyncMock,
+    ):
+        """A Signal portal message is sent to the WhatsApp portal."""
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={"@bob:example.com": FakeUser(display_name="Bob")},
+        )
+        event = FakeEvent(sender="@bob:example.com", body="hi from Signal")
+
+        await on_message(room, event)
+
+        target_rooms = {c[0][0] for c in client.room_send.await_args_list}
+        assert WHATSAPP_ROOM in target_rooms
+
+    async def test_whatsapp_portal_cross_relays_to_signal(
+        self, on_message, client: AsyncMock,
+    ):
+        """A WhatsApp portal message is sent to the Signal portal."""
+        room = FakeRoom(
+            room_id=WHATSAPP_ROOM,
+            users={"@alice:example.com": FakeUser(display_name="Alice")},
+        )
+        event = FakeEvent(sender="@alice:example.com", body="hi from WA")
+
+        await on_message(room, event)
+
+        target_rooms = {c[0][0] for c in client.room_send.await_args_list}
+        assert SIGNAL_ROOM in target_rooms
+
+    async def test_portal_does_not_echo_to_self(
+        self, on_message, client: AsyncMock,
+    ):
+        """The source portal is skipped — no echo back to itself."""
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={"@bob:example.com": FakeUser(display_name="Bob")},
+        )
+        event = FakeEvent(sender="@bob:example.com", body="no echo")
+
+        await on_message(room, event)
+
+        target_rooms = [c[0][0] for c in client.room_send.await_args_list]
+        assert SIGNAL_ROOM not in target_rooms
+
+    async def test_cross_relay_uses_source_portal_label(
+        self, on_message, client: AsyncMock,
+    ):
+        """Cross-relayed message carries the *source* portal's label."""
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={"@bob:example.com": FakeUser(display_name="Bob")},
+        )
+        event = FakeEvent(sender="@bob:example.com", body="labeled msg")
+
+        await on_message(room, event)
+
+        # Find the call targeting the WhatsApp portal.
+        for call in client.room_send.await_args_list:
+            if call[0][0] == WHATSAPP_ROOM:
+                body = call[1]["content"]["body"]
+                assert body == "**Bob (Signal):** labeled msg"
+                break
+        else:
+            pytest.fail("No cross-relay call to WhatsApp portal found")
+
+    async def test_cross_relay_resilience(
+        self, on_message, client: AsyncMock,
+    ):
+        """Failure sending to one cross-relay target doesn't block others."""
+        # Use 3 portals to test resilience (hub + 2 cross-relay targets).
+        import relay_bot
+
+        third_room = "!telegram_portal:example.com"
+        portals = {
+            WHATSAPP_ROOM: "WhatsApp",
+            SIGNAL_ROOM: "Signal",
+            third_room: "Telegram",
+        }
+        on_msg = relay_bot.make_on_message(client, MY_USER, portals, HUB_ROOM)
+
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={"@bob:example.com": FakeUser(display_name="Bob")},
+        )
+        event = FakeEvent(sender="@bob:example.com", body="resilience")
+
+        # Hub send succeeds, first cross-relay fails, second succeeds.
+        client.room_send.side_effect = [
+            AsyncMock(),                      # → hub
+            RuntimeError("network timeout"),  # → WhatsApp (or Telegram)
+            AsyncMock(),                      # → Telegram (or WhatsApp)
+        ]
+
+        await on_msg(room, event)
+
+        # All 3 targets attempted: hub + 2 other portals.
+        assert client.room_send.await_count == 3
