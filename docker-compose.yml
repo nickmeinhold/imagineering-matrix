@@ -69,7 +69,8 @@ services:
     environment:
       MATRIX_HOMESERVER: http://continuwuity:6167
       MATRIX_USER: ${RELAY_BOT_USER}
-      MATRIX_PASSWORD: ${RELAY_BOT_PASSWORD}
+      MATRIX_PASSWORD: ${RELAY_BOT_PASSWORD:-}
+      MATRIX_ACCESS_TOKEN: ${RELAY_BOT_ACCESS_TOKEN:-}
       WHATSAPP_ROOM_ID: ${WHATSAPP_ROOM_ID}
       HUB_ROOM_ID: ${HUB_ROOM_ID}
     depends_on:

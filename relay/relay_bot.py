@@ -26,7 +26,8 @@ log = logging.getLogger("relay")
 
 HOMESERVER = os.environ["MATRIX_HOMESERVER"]
 USER = os.environ["MATRIX_USER"]
-PASSWORD = os.environ["MATRIX_PASSWORD"]
+PASSWORD = os.environ.get("MATRIX_PASSWORD", "")
+ACCESS_TOKEN = os.environ.get("MATRIX_ACCESS_TOKEN", "")
 WHATSAPP_ROOM = os.environ["WHATSAPP_ROOM_ID"]
 HUB_ROOM = os.environ["HUB_ROOM_ID"]
 
@@ -88,28 +89,12 @@ def _display_name(room: MatrixRoom, user_id: str) -> str:
     return user_id.split(":")[0].lstrip("@")
 
 
-async def main() -> None:
-    client = AsyncClient(HOMESERVER, USER)
+def make_on_message(client: AsyncClient, my_user_id: str):
+    """Build the ``on_message`` callback closed over *client* and *my_user_id*.
 
-    log.info("Logging in as %s on %s", USER, HOMESERVER)
-    resp = await client.login(PASSWORD)
-    if hasattr(resp, "access_token"):
-        log.info("Login successful")
-    else:
-        log.error("Login failed: %s", resp)
-        sys.exit(1)
-
-    my_user_id: str = client.user_id
-
-    # Join both rooms (no-op if already joined).
-    for room_id in (WHATSAPP_ROOM, HUB_ROOM):
-        join_resp = await client.join(room_id)
-        log.info("Join %s: %s", room_id, join_resp)
-
-    # Run an initial sync so we don't replay old history.
-    log.info("Running initial sync …")
-    await client.sync(timeout=10_000, full_state=True)
-    log.info("Initial sync done — listening for messages")
+    Extracted from ``main()`` so that the callback can be tested without running
+    the full startup sequence.
+    """
 
     async def on_message(room: MatrixRoom, event: RoomMessageText) -> None:
         # Ignore our own messages.
@@ -149,7 +134,43 @@ async def main() -> None:
         except Exception:
             log.exception("Failed to relay message to %s", target)
 
-    client.add_event_callback(on_message, RoomMessageText)
+    return on_message
+
+
+async def main() -> None:
+    client = AsyncClient(HOMESERVER, USER)
+
+    if ACCESS_TOKEN:
+        client.access_token = ACCESS_TOKEN
+        client.user_id = USER
+        log.info("Using access token for %s on %s", USER, HOMESERVER)
+    elif PASSWORD:
+        log.info("Logging in as %s on %s", USER, HOMESERVER)
+        resp = await client.login(PASSWORD)
+        if hasattr(resp, "access_token"):
+            log.info("Login successful")
+        else:
+            log.error("Login failed: %s", resp)
+            sys.exit(1)
+    else:
+        log.error("Set MATRIX_ACCESS_TOKEN or MATRIX_PASSWORD")
+        sys.exit(1)
+
+    my_user_id: str = client.user_id
+
+    # Join both rooms (no-op if already joined).
+    for room_id in (WHATSAPP_ROOM, HUB_ROOM):
+        join_resp = await client.join(room_id)
+        log.info("Join %s: %s", room_id, join_resp)
+
+    # Run an initial sync so we don't replay old history.
+    log.info("Running initial sync …")
+    await client.sync(timeout=10_000, full_state=True)
+    log.info("Initial sync done — listening for messages")
+
+    client.add_event_callback(
+        make_on_message(client, my_user_id), RoomMessageText
+    )
 
     # Sync forever.
     await client.sync_forever(timeout=30_000)
