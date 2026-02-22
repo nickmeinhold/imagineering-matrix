@@ -190,6 +190,22 @@ def make_on_message(
             except Exception:
                 log.exception("Failed to relay message to %s", _hub_room)
 
+            # Portal → other portals (cross-relay): megabridge portals can't
+            # see each other via the hub because the bot's own hub message is
+            # ignored by loop-prevention layer 1.  Send directly instead.
+            for portal_id, portal_label in _portal_rooms.items():
+                if portal_id == room.room_id:
+                    continue  # don't echo back to source
+                log.info("Cross-relay %s → %s: %s", room.room_id, portal_id, attributed[:120])
+                try:
+                    await client.room_send(
+                        portal_id,
+                        message_type="m.room.message",
+                        content={"msgtype": "m.text", "body": attributed},
+                    )
+                except Exception:
+                    log.exception("Failed to cross-relay message to %s", portal_id)
+
         elif room.room_id == _hub_room:
             # Hub → all portals: fan out with platform label.
             label = _platform_label(event.sender)
