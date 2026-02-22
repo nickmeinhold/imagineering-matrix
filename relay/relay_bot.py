@@ -34,9 +34,15 @@ HUB_ROOM = os.environ["HUB_ROOM_ID"]
 # by the bridges themselves, so we must not double-relay them.
 BRIDGE_BOT_LOCALPARTS = {"whatsappbot", "discordbot", "telegrambot", "signalbot"}
 
-# Regex to detect messages that already carry relay attribution like
-# "**Name (Platform):** …" to avoid re-wrapping relayed text.
-ATTRIBUTION_RE = re.compile(r"^\*\*.+\(.*\):\*\*")
+# Patterns to detect messages that already carry relay attribution to avoid
+# re-wrapping relayed text.  Matches both:
+#   - Bold markdown: "**Name (Platform):** …"  (this bot's format)
+#   - Plain colon:   "Name: …"                 (Discord relay-mode webhook format)
+ATTRIBUTION_RE = re.compile(
+    r"^\*\*.+\(.*\):\*\*"  # bold attribution from this bot
+    r"|"
+    r"^[A-Z][A-Za-z0-9_ ]+: ",  # plain "Name: msg" from Discord relay mode
+)
 
 
 def _is_bridge_puppet(user_id: str) -> bool:
@@ -53,6 +59,24 @@ def _is_bridge_puppet(user_id: str) -> bool:
     if localpart.startswith(("_whatsapp_", "_discord_", "_telegram_", "_signal_")):
         return True
     return False
+
+
+def _platform_label(user_id: str) -> str:
+    """Infer the originating platform from a Matrix user ID.
+
+    Bridge puppet MXIDs contain a platform prefix (e.g. ``@_discord_123:domain``).
+    For native Matrix users we fall back to "Matrix".
+    """
+    localpart = user_id.split(":")[0].lstrip("@")
+    for prefix, name in (
+        ("_discord_", "Discord"),
+        ("_telegram_", "Telegram"),
+        ("_signal_", "Signal"),
+        ("_whatsapp_", "WhatsApp"),
+    ):
+        if localpart.startswith(prefix):
+            return name
+    return "Matrix"
 
 
 def _display_name(room: MatrixRoom, user_id: str) -> str:
@@ -107,17 +131,23 @@ async def main() -> None:
             label = "WhatsApp"
         elif room.room_id == HUB_ROOM:
             target = WHATSAPP_ROOM
-            label = "Matrix"
+            # Try to infer the originating platform from the sender's MXID so
+            # the WhatsApp side sees "Nick (Telegram)" instead of "Nick (Matrix)"
+            # for messages that arrived via another bridge.
+            label = _platform_label(event.sender)
         else:
             return
 
         attributed = f"**{sender} ({label}):** {event.body}"
         log.info("Relay %s → %s: %s", room.room_id, target, attributed[:120])
-        await client.room_send(
-            target,
-            message_type="m.room.message",
-            content={"msgtype": "m.text", "body": attributed},
-        )
+        try:
+            await client.room_send(
+                target,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": attributed},
+            )
+        except Exception:
+            log.exception("Failed to relay message to %s", target)
 
     client.add_event_callback(on_message, RoomMessageText)
 
