@@ -134,6 +134,17 @@ class TestErrorCases:
         with patch.dict(os.environ, env, clear=True), pytest.raises(SystemExit):
             relay_bot.parse_portal_rooms()
 
+    def test_missing_label_exits(self):
+        """A PORTAL_ROOMS entry without a label causes sys.exit(1)."""
+        import relay_bot
+
+        env = _clean_env()
+        env["PORTAL_ROOMS"] = "!wa:domain"
+        env["HUB_ROOM_ID"] = "!hub:domain"
+
+        with patch.dict(os.environ, env, clear=True), pytest.raises(SystemExit):
+            relay_bot.parse_portal_rooms()
+
 
 class TestWhitespace:
     """Whitespace in env var values is trimmed."""

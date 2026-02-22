@@ -119,7 +119,15 @@ def parse_portal_rooms() -> tuple[dict[str, str], str]:
             if not entry:
                 continue
             room_id, _, label = entry.partition("=")
-            portal_rooms[room_id.strip()] = label.strip()
+            label = label.strip()
+            if not label:
+                log.error(
+                    "PORTAL_ROOMS entry %r is missing a label (expected "
+                    "'!room:domain=Label')",
+                    entry,
+                )
+                sys.exit(1)
+            portal_rooms[room_id.strip()] = label
         if portal_rooms:
             return portal_rooms, hub_room
 
