@@ -71,7 +71,9 @@ def client() -> AsyncMock:
 @pytest.fixture()
 def on_message(client: AsyncMock):
     """The relay callback, ready to call as ``await on_message(room, event)``."""
-    return relay_bot.make_on_message(client, MY_USER)
+    return relay_bot.make_on_message(
+        client, MY_USER, {WHATSAPP_ROOM: "WhatsApp"}, HUB_ROOM,
+    )
 
 
 @pytest.fixture()
