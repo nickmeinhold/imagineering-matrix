@@ -174,7 +174,8 @@ Administration is done via the `#admins` room, not an HTTP API:
 |-----------|-----|
 | Continuwuity | 50-150 MB |
 | Each mautrix bridge | 50-100 MB |
-| **Total (4 bridges)** | ~300-550 MB |
+| Relay bot | ~30 MB |
+| **Total (4 bridges + relay)** | ~330-580 MB |
 
 ## Backup
 
@@ -219,7 +220,7 @@ Signal group  ──►  │     Room        │ ◄── Telegram group
 
 - **Discord**: `!discord bridge <channel-id>` in the hub room, then `!discord set-relay` for webhook-based name/avatar relay.
 - **Telegram**: `!tg bridge -<chat-id>` in the hub room. Bot must be admin in the Telegram group.
-- **WhatsApp**: `!wa open <group-jid>` — experimental, may not work with megabridge architecture.
+- **WhatsApp**: Cannot be plumbed (megabridge limitation). Uses the relay bot instead — see [WhatsApp Relay Bot](#whatsapp-relay-bot) below.
 - **Signal**: Not supported for plumbing. Stays as a separate portal room in the Space.
 
 ### Relay mode
@@ -234,12 +235,71 @@ Users who've logged into a bridge get full puppeting (messages appear as them). 
 - **Continuwuity bug**: Original Conduit had a bug where puppet users couldn't join rooms. Continuwuity may have fixed this — if plumbing fails, check Continuwuity issue tracker.
 - **State file**: Superbridge state (room ID, access token) stored on Pi at `~/matrix/.superbridge-state`.
 
+### WhatsApp Relay Bot
+
+mautrix-whatsapp's megabridge architecture can't plumb a WhatsApp group into an existing room. The relay bot (`relay/`) bridges the gap by copying messages between the WhatsApp portal room and the hub room with sender attribution.
+
+```
+WhatsApp portal room ◄──relay bot──► Hub room (Discord + Telegram + Matrix)
+```
+
+#### Setup
+
+1. Register a dedicated Matrix account for the bot:
+
+```bash
+curl -X POST "http://localhost:8008/_matrix/client/v3/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "relaybot",
+    "password": "your-password",
+    "auth": {"type": "m.login.registration_token", "token": "your-token"}
+  }'
+```
+
+2. Add the relay bot env vars to `.env`:
+
+```bash
+RELAY_BOT_USER=@relaybot:yourdomain.com
+RELAY_BOT_PASSWORD=your-relay-bot-password
+WHATSAPP_ROOM_ID=!whatsapp-portal-room-id:yourdomain.com
+HUB_ROOM_ID=!superbridge-hub-room-id:yourdomain.com
+```
+
+The WhatsApp room ID is the portal room created by mautrix-whatsapp (find via Element devtools). The hub room ID is stored in `.superbridge-state` on the Pi.
+
+3. Start the bot:
+
+```bash
+docker compose up -d relay-bot
+```
+
+#### How it works
+
+- Listens for messages in both rooms via `matrix-nio` (async Matrix client)
+- WhatsApp room → hub: prefixed with `**Name (WhatsApp):**`
+- Hub → WhatsApp room: prefixed with `**Name (Platform):**` where platform is inferred from the sender's MXID (e.g. Discord, Telegram, or Matrix)
+- Loop prevention (three layers):
+  1. Ignores its own messages
+  2. Ignores bridge bots and puppet users (`@whatsappbot:`, `@_discord_*:`, etc.)
+  3. Ignores messages that already have relay attribution (`**Name (Platform):**` or `Name: message`)
+
+#### Files
+
+| File | Purpose |
+|------|---------|
+| `relay/relay_bot.py` | Bot logic (~160 lines) |
+| `relay/requirements.txt` | `matrix-nio` dependency |
+| `relay/Dockerfile` | `python:3.12-slim` container |
+
 ### Verification
 
-1. Send from Discord — appears in Matrix, Telegram, (WhatsApp)
-2. Send from Telegram — appears in Discord, Matrix
-3. Send from Element — appears on all bridged platforms
-4. Messages show sender attribution on all platforms
+1. Send from Discord — appears in Matrix, Telegram, WhatsApp
+2. Send from Telegram — appears in Discord, Matrix, WhatsApp
+3. Send from WhatsApp — appears in hub room, Discord, Telegram
+4. Send from Element — appears on all bridged platforms
+5. Messages show sender attribution on all platforms
+6. No message loops or duplicate messages
 
 ## Limitations vs Synapse
 

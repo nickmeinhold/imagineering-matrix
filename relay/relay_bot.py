@@ -26,7 +26,8 @@ log = logging.getLogger("relay")
 
 HOMESERVER = os.environ["MATRIX_HOMESERVER"]
 USER = os.environ["MATRIX_USER"]
-PASSWORD = os.environ["MATRIX_PASSWORD"]
+PASSWORD = os.environ.get("MATRIX_PASSWORD", "")
+ACCESS_TOKEN = os.environ.get("MATRIX_ACCESS_TOKEN", "")
 WHATSAPP_ROOM = os.environ["WHATSAPP_ROOM_ID"]
 HUB_ROOM = os.environ["HUB_ROOM_ID"]
 
@@ -91,12 +92,20 @@ def _display_name(room: MatrixRoom, user_id: str) -> str:
 async def main() -> None:
     client = AsyncClient(HOMESERVER, USER)
 
-    log.info("Logging in as %s on %s", USER, HOMESERVER)
-    resp = await client.login(PASSWORD)
-    if hasattr(resp, "access_token"):
-        log.info("Login successful")
+    if ACCESS_TOKEN:
+        client.access_token = ACCESS_TOKEN
+        client.user_id = USER
+        log.info("Using access token for %s on %s", USER, HOMESERVER)
+    elif PASSWORD:
+        log.info("Logging in as %s on %s", USER, HOMESERVER)
+        resp = await client.login(PASSWORD)
+        if hasattr(resp, "access_token"):
+            log.info("Login successful")
+        else:
+            log.error("Login failed: %s", resp)
+            sys.exit(1)
     else:
-        log.error("Login failed: %s", resp)
+        log.error("Set MATRIX_ACCESS_TOKEN or MATRIX_PASSWORD")
         sys.exit(1)
 
     my_user_id: str = client.user_id
