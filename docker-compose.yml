@@ -61,6 +61,20 @@ services:
     depends_on:
       - continuwuity
 
+  # WhatsApp ↔ Hub relay bot — bridges the WhatsApp portal room into the
+  # superbridge hub room since mautrix-whatsapp can't plumb into existing rooms.
+  relay-bot:
+    build: ./relay
+    restart: always
+    environment:
+      MATRIX_HOMESERVER: http://continuwuity:6167
+      MATRIX_USER: ${RELAY_BOT_USER}
+      MATRIX_PASSWORD: ${RELAY_BOT_PASSWORD}
+      WHATSAPP_ROOM_ID: ${WHATSAPP_ROOM_ID}
+      HUB_ROOM_ID: ${HUB_ROOM_ID}
+    depends_on:
+      - continuwuity
+
 volumes:
   continuwuity_data:
   telegram_data:
