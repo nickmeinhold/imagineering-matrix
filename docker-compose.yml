@@ -61,8 +61,9 @@ services:
     depends_on:
       - continuwuity
 
-  # WhatsApp ↔ Hub relay bot — bridges the WhatsApp portal room into the
-  # superbridge hub room since mautrix-whatsapp can't plumb into existing rooms.
+  # Multi-portal ↔ Hub relay bot — bridges megabridge portal rooms (WhatsApp,
+  # Signal, etc.) into the superbridge hub room.  Set PORTAL_ROOMS for multiple
+  # portals, or WHATSAPP_ROOM_ID for single-portal backward compatibility.
   relay-bot:
     build: ./relay
     restart: always
@@ -71,7 +72,8 @@ services:
       MATRIX_USER: ${RELAY_BOT_USER}
       MATRIX_PASSWORD: ${RELAY_BOT_PASSWORD:-}
       MATRIX_ACCESS_TOKEN: ${RELAY_BOT_ACCESS_TOKEN:-}
-      WHATSAPP_ROOM_ID: ${WHATSAPP_ROOM_ID}
+      PORTAL_ROOMS: ${PORTAL_ROOMS:-}
+      WHATSAPP_ROOM_ID: ${WHATSAPP_ROOM_ID:-}
       HUB_ROOM_ID: ${HUB_ROOM_ID}
     depends_on:
       - continuwuity
