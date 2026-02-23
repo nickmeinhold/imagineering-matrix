@@ -57,6 +57,11 @@ def _make_handler(
     """Build a RelayHandler with mocked puppet manager and event map."""
     appservice = MagicMock()
     appservice.bot_mxid = BOT_MXID
+    appservice.intent = MagicMock()
+    appservice.intent.get_profile = AsyncMock(
+        return_value=MagicMock(displayname="Alice", avatar_url=None)
+    )
+    appservice.intent.get_state_event = AsyncMock(side_effect=Exception("No member state"))
 
     puppet_manager = AsyncMock()
     puppet_intent = AsyncMock()

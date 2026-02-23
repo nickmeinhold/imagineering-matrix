@@ -64,6 +64,36 @@ CONTINUWUITY_ALLOW_REGISTRATION=false
 
 Then `docker compose up -d` to apply.
 
+## Deployment
+
+The Pi is not a git repo — deploy updated files via `scp` and restart services.
+
+**SSH alias:** `pi` (connects to the Raspberry Pi)
+**Remote path:** `~/matrix/`
+
+### Deploy a config or code change
+
+```bash
+# Copy updated files to the Pi
+scp docker-compose.yml pi:~/matrix/docker-compose.yml
+scp -r relay/ pi:~/matrix/relay/
+
+# Restart affected services
+ssh pi "cd ~/matrix && docker compose up -d"
+```
+
+Docker Compose will recreate only containers whose config changed.
+
+### Deploy with volume reset (e.g. relay puppet cleanup)
+
+When relay puppets need re-creation (stale profiles, corrupt DB), clear the data volume:
+
+```bash
+ssh pi "cd ~/matrix && docker compose rm -f relay-bot && docker volume rm matrix_relay_data && docker compose up -d"
+```
+
+The `rm -f` is required before `volume rm` — Docker won't remove a volume still attached to a stopped container.
+
 ## Caddy Config
 
 ```
