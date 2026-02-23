@@ -47,6 +47,16 @@ ATTRIBUTION_RE = re.compile(
 )
 
 
+def _is_bridge_bot(user_id: str) -> bool:
+    """Return True if *user_id* is a bridge bot (e.g. ``@whatsappbot:``).
+
+    Bridge bots are the well-known service accounts listed in
+    ``BRIDGE_BOT_LOCALPARTS``.  This does **not** match puppet users.
+    """
+    localpart = user_id.split(":")[0].lstrip("@")
+    return localpart in BRIDGE_BOT_LOCALPARTS
+
+
 def _is_bridge_puppet(user_id: str) -> bool:
     """Return True if *user_id* belongs to a bridge puppet or bot.
 
@@ -162,21 +172,22 @@ def make_on_message(
     _hub_room = hub_room if hub_room is not None else HUB_ROOM
 
     async def on_message(room: MatrixRoom, event: RoomMessageText) -> None:
-        # Ignore our own messages.
+        # Layer 1: ignore our own messages.
         if event.sender == my_user_id:
             return
 
-        # Ignore bridge bots and puppet users — the bridges handle those.
-        if _is_bridge_puppet(event.sender):
-            return
-
-        # Ignore messages that already have relay attribution.
+        # Layer 3: ignore messages that already have relay attribution.
         if ATTRIBUTION_RE.match(event.body):
             return
 
         sender = _display_name(room, event.sender)
 
         if room.room_id in _portal_rooms:
+            # Layer 2a (portal): only filter bridge bots.  Puppets ARE the
+            # real users in portal rooms — they must be relayed.
+            if _is_bridge_bot(event.sender):
+                return
+
             # Portal → hub: use the portal's configured label.
             label = _portal_rooms[room.room_id]
             attributed = f"**{sender} ({label}):** {event.body}"
@@ -207,6 +218,11 @@ def make_on_message(
                     log.exception("Failed to cross-relay message to %s", portal_id)
 
         elif room.room_id == _hub_room:
+            # Layer 2b (hub): filter both bridge bots and puppet users —
+            # the bridges handle their own puppets natively in the hub.
+            if _is_bridge_puppet(event.sender):
+                return
+
             # Hub → all portals: fan out with platform label.
             label = _platform_label(event.sender)
             attributed = f"**{sender} ({label}):** {event.body}"
