@@ -89,8 +89,8 @@ class PuppetManager:
             if self._display_names.get(mxid) != display_name:
                 await intent.set_displayname(display_name)
                 self._display_names[mxid] = display_name
-            if self._avatar_urls.get(mxid) != avatar_url and avatar_url:
-                await intent.set_avatar_url(avatar_url)
+            if self._avatar_urls.get(mxid) != avatar_url:
+                await intent.set_avatar_url(avatar_url or "")
                 self._avatar_urls[mxid] = avatar_url
 
         await intent.ensure_joined(room_id)

@@ -8,6 +8,7 @@ via event ID mapping.
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .loop_prevention import (
@@ -36,6 +37,9 @@ class RelayHandler:
         event_map: Optional event ID mapping store for reply/reaction relay.
     """
 
+    #: How long (seconds) to cache a sender's profile before re-fetching.
+    PROFILE_CACHE_TTL: float = 60.0
+
     def __init__(
         self,
         appservice: AppService,
@@ -49,6 +53,8 @@ class RelayHandler:
         self._portal_rooms = portal_rooms
         self._hub_room_id = hub_room_id
         self._event_map = event_map
+        # sender MXID -> (display_name, avatar_url, fetched_at)
+        self._profile_cache: dict[str, tuple[str, str | None, float]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -283,6 +289,10 @@ class RelayHandler:
     async def _get_sender_profile(self, sender: str) -> tuple[str, str | None]:
         """Fetch the sender's display name and avatar from the homeserver.
 
+        Results are cached for :attr:`PROFILE_CACHE_TTL` seconds so that
+        repeated messages from the same sender don't each require a network
+        round-trip to the homeserver.
+
         Queries the profile via the appservice bot intent so we get the real
         display name that the mautrix bridge already set (e.g. "Alice") instead
         of the raw MXID localpart (e.g. "signal_1f11a469-eb2d-4c50-…").
@@ -291,12 +301,23 @@ class RelayHandler:
             A ``(display_name, avatar_url)`` tuple.  Falls back to the MXID
             localpart and ``None`` if the profile lookup fails.
         """
+        now = time.monotonic()
+        cached = self._profile_cache.get(sender)
+        if cached is not None:
+            name, avatar, fetched_at = cached
+            if now - fetched_at < self.PROFILE_CACHE_TTL:
+                return name, avatar
+
         try:
             profile = await self._appservice.intent.get_profile(sender)
             display_name = getattr(profile, "displayname", None) or ""
             avatar_url = getattr(profile, "avatar_url", None) or None
             if display_name:
+                self._profile_cache[sender] = (display_name, avatar_url, now)
                 return display_name, avatar_url
         except Exception:
             log.debug("Profile lookup failed for %s, using localpart", sender)
-        return sender.split(":")[0].lstrip("@"), None
+
+        fallback = sender.split(":")[0].lstrip("@")
+        self._profile_cache[sender] = (fallback, None, now)
+        return fallback, None
