@@ -11,6 +11,8 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
+from mautrix.types import EventType
+
 if TYPE_CHECKING:
     from mautrix.appservice import AppService
     from mautrix.appservice.api import IntentAPI
@@ -35,6 +37,11 @@ class PuppetManager:
         self._display_names: dict[str, str] = {}
         # Cache: puppet_mxid -> last avatar URL set
         self._avatar_urls: dict[str, str | None] = {}
+        # Cache: (puppet_mxid, room_id) -> (display_name, avatar_url) last
+        # written into the room member state event.  Bridges read the room
+        # member event (not the global profile) to get display names and
+        # avatars, so we must explicitly keep it in sync.
+        self._member_profiles: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     def mxid_for(self, platform: str, sender: str) -> str:
         """Return a deterministic puppet MXID for *sender* on *platform*.
@@ -65,6 +72,9 @@ class PuppetManager:
         On every call:
         - Ensures the puppet has joined *room_id*.
         - Updates the display name or avatar if they have changed.
+        - Syncs the room member state event so bridges see the correct
+          display name and avatar (they read member state, not the global
+          profile).
 
         Args:
             platform: Platform label in lowercase (e.g. ``"whatsapp"``).
@@ -94,4 +104,25 @@ class PuppetManager:
                 self._avatar_urls[mxid] = avatar_url
 
         await intent.ensure_joined(room_id)
+
+        # Bridges (WhatsApp, Discord, etc.) read display names and avatars
+        # from the m.room.member state event, NOT the global profile.
+        # Continuwuity doesn't auto-propagate profile changes into room
+        # member events, so we explicitly update the state when the profile
+        # differs from what we last wrote for this (puppet, room) pair.
+        current_profile = (display_name, avatar_url)
+        member_key = (mxid, room_id)
+        if self._member_profiles.get(member_key) != current_profile:
+            await intent.send_state_event(
+                room_id,
+                EventType.ROOM_MEMBER,
+                mxid,
+                content={
+                    "membership": "join",
+                    "displayname": display_name,
+                    "avatar_url": avatar_url or "",
+                },
+            )
+            self._member_profiles[member_key] = current_profile
+
         return intent
