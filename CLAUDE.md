@@ -235,56 +235,56 @@ Users who've logged into a bridge get full puppeting (messages appear as them). 
 - **Continuwuity bug**: Original Conduit had a bug where puppet users couldn't join rooms. Continuwuity may have fixed this — if plumbing fails, check Continuwuity issue tracker.
 - **State file**: Superbridge state (room ID, access token) stored on Pi at `~/matrix/.superbridge-state`.
 
-### Multi-Portal Relay Bot
+### Relay Appservice (Puppet-Based)
 
-Megabridge-based mautrix bridges (WhatsApp, Signal) can't plumb a group into an existing room. The relay bot (`relay/`) bridges the gap by copying messages between one or more portal rooms and the hub room with sender attribution.
+Megabridge-based mautrix bridges (WhatsApp, Signal) can't plumb a group into an existing room. The relay appservice (`relay/`) bridges the gap using **puppet users** — messages appear as the actual sender with their name and avatar, instead of a single bot with text attribution.
 
 ```
 WhatsApp portal room ◄──┐
-                         ├──relay bot──► Hub room (Discord + Telegram + Matrix)
+                         ├──relay appservice──► Hub room (Discord + Telegram + Matrix)
 Signal portal room  ◄───┘
+                    (puppet users relay with sender identity)
 ```
+
+Features:
+- **Puppet users**: Each sender gets a dedicated Matrix identity (`@_relay_{platform}_{hash}:domain`)
+- **Display names**: Just the sender's name (no platform suffix)
+- **Reply threading**: `m.in_reply_to` references preserved across rooms via SQLite event map
+- **Reaction relay**: Emoji reactions forwarded to the correct message in all rooms
+- **Cross-relay**: Portal rooms can see each other (WhatsApp ↔ Signal)
 
 #### Configuration
 
-Two formats are supported:
-
 ```bash
-# Multi-portal (recommended): relay multiple megabridge rooms
+# In .env:
+RELAY_AS_TOKEN=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
+RELAY_HS_TOKEN=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
 PORTAL_ROOMS=!whatsapp-room:yourdomain.com=WhatsApp,!signal-room:yourdomain.com=Signal
-
-# Legacy single-portal: still works for backward compatibility
-WHATSAPP_ROOM_ID=!whatsapp-room:yourdomain.com
-```
-
-`PORTAL_ROOMS` takes precedence when set. Each entry is `!room_id:domain=Label` separated by commas. The label (e.g. `WhatsApp`, `Signal`) is required and appears in relay attribution.
-
-#### Setup
-
-1. Register a dedicated Matrix account for the bot:
-
-```bash
-curl -X POST "http://localhost:8008/_matrix/client/v3/register" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "relaybot",
-    "password": "your-password",
-    "auth": {"type": "m.login.registration_token", "token": "your-token"}
-  }'
-```
-
-2. Add the relay bot env vars to `.env`:
-
-```bash
-RELAY_BOT_USER=@relaybot:yourdomain.com
-RELAY_BOT_PASSWORD=your-relay-bot-password
-PORTAL_ROOMS=!whatsapp-portal-room-id:yourdomain.com=WhatsApp,!signal-portal-room-id:yourdomain.com=Signal
 HUB_ROOM_ID=!superbridge-hub-room-id:yourdomain.com
 ```
 
-Portal room IDs are the portal rooms created by mautrix bridges (find via Element devtools). The hub room ID is stored in `.superbridge-state` on the Pi.
+Each `PORTAL_ROOMS` entry is `!room_id:domain=Label` separated by commas.
 
-3. Start the bot:
+#### Setup
+
+1. Generate tokens:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"  # run twice: AS + HS
+```
+
+2. Edit `relay/registration.yaml` — replace `CHANGE_ME_*` placeholders with real domain and tokens.
+
+3. Register the appservice via the admin room:
+
+```
+!admin appservices register
+<paste contents of relay/registration.yaml>
+```
+
+4. Add tokens and room IDs to `.env` (see `.env.example`).
+
+5. Start:
 
 ```bash
 docker compose up -d relay-bot
@@ -292,31 +292,54 @@ docker compose up -d relay-bot
 
 #### How it works
 
-- Listens for messages in all portal rooms and the hub room via `matrix-nio` (async Matrix client)
-- Portal room → hub: prefixed with `**Name (Label):**` using the portal's configured label
-- Hub → all portal rooms: fans out to every portal, prefixed with `**Name (Platform):**` where platform is inferred from the sender's MXID (e.g. Discord, Telegram, or Matrix)
-- Fan-out is resilient: failure to send to one portal does not block delivery to others
+- Runs as a Matrix **appservice** receiving events via HTTP push (port 8009)
+- Uses `mautrix-python` `IntentAPI` to send messages as puppet users
+- Portal → hub + other portals: puppet sends with sender's display name
+- Hub → all portals: fan-out with per-sender puppet identity
+- Replies: source→target event ID mappings stored in SQLite (WAL mode); `m.in_reply_to` references translated to target room's event IDs
+- Reactions: `m.reaction` events relayed via puppet intents to the mapped event in each target room
 - Loop prevention (three layers):
-  1. Ignores its own messages
-  2. Ignores bridge bots and puppet users (`@whatsappbot:`, `@_discord_*:`, etc.)
-  3. Ignores messages that already have relay attribution (`**Name (Platform):**` or `Name: message`)
+  1. Ignores bot's own messages and relay puppet users (`@_relay_*:`)
+  2. Portal rooms: ignores bridge bots; hub room: ignores bridge bots + puppets
+  3. Ignores messages with existing attribution patterns
+- Fan-out is resilient: failure to one target does not block others
+- Background cleanup: event mappings older than 30 days are pruned every 6 hours
 
 #### Files
 
 | File | Purpose |
 |------|---------|
-| `relay/relay_bot.py` | Bot logic (~250 lines) |
-| `relay/requirements.txt` | `matrix-nio` dependency |
-| `relay/Dockerfile` | `python:3.12-slim` container |
+| `relay/appservice/__main__.py` | Entry point: creates AppService, wires handler, starts HTTP server |
+| `relay/appservice/config.py` | `RelayConfig` dataclass from env vars |
+| `relay/appservice/handler.py` | Core relay logic: message routing, reply/reaction relay |
+| `relay/appservice/puppet.py` | Puppet user management: deterministic MXIDs, profile sync |
+| `relay/appservice/event_map.py` | SQLite event ID mapping for replies and reactions |
+| `relay/appservice/loop_prevention.py` | Three-layer loop prevention (pure functions) |
+| `relay/registration.yaml` | Appservice registration template for Continuwuity |
+| `relay/requirements.txt` | `mautrix`, `aiosqlite` |
+| `relay/Dockerfile` | `python:3.12-slim` container with `/data` volume |
+
+#### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RELAY_AS_TOKEN` | Yes | Appservice token (matches `registration.yaml`) |
+| `RELAY_HS_TOKEN` | Yes | Homeserver token (matches `registration.yaml`) |
+| `PORTAL_ROOMS` | Yes | Portal rooms: `!room:domain=Label,...` |
+| `HUB_ROOM_ID` | Yes | Hub room ID |
+| `RELAY_BOT_LOCALPART` | No | Bot localpart (default: `relay-bot`) |
+| `RELAY_DB_PATH` | No | SQLite path (default: `/data/relay.db`) |
+
+`RELAY_HOMESERVER_URL` and `RELAY_DOMAIN` are set in `docker-compose.yml` from `MATRIX_SERVER_NAME`.
 
 ### Verification
 
 1. Send from Discord — appears in Matrix, Telegram, WhatsApp, Signal
 2. Send from Telegram — appears in Discord, Matrix, WhatsApp, Signal
-3. Send from WhatsApp — appears in hub room, Discord, Telegram, Signal
-4. Send from Signal — appears in hub room, Discord, Telegram, WhatsApp
-5. Send from Element — appears on all bridged platforms
-6. Messages show sender attribution on all platforms
+3. Send from WhatsApp — appears in hub as puppet user "Alice" (with name), not `**Alice (WhatsApp):**`
+4. Reply to a message from Element — reply thread preserved in WhatsApp/Signal portals
+5. React with emoji from Discord — reaction appears on correct message in all rooms
+6. Send from Element — appears on all bridged platforms
 7. No message loops or duplicate messages
 
 ## Limitations vs Synapse

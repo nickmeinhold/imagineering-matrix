@@ -61,20 +61,22 @@ services:
     depends_on:
       - continuwuity
 
-  # Multi-portal ↔ Hub relay bot — bridges megabridge portal rooms (WhatsApp,
-  # Signal, etc.) into the superbridge hub room.  Set PORTAL_ROOMS for multiple
-  # portals, or WHATSAPP_ROOM_ID for single-portal backward compatibility.
+  # Relay appservice — bridges megabridge portal rooms (WhatsApp, Signal, etc.)
+  # into the superbridge hub room using puppet users for sender attribution.
+  # Register relay/registration.yaml via the admin room before first start.
   relay-bot:
     build: ./relay
     restart: always
     environment:
-      MATRIX_HOMESERVER: http://continuwuity:6167
-      MATRIX_USER: ${RELAY_BOT_USER}
-      MATRIX_PASSWORD: ${RELAY_BOT_PASSWORD:-}
-      MATRIX_ACCESS_TOKEN: ${RELAY_BOT_ACCESS_TOKEN:-}
-      PORTAL_ROOMS: ${PORTAL_ROOMS:-}
-      WHATSAPP_ROOM_ID: ${WHATSAPP_ROOM_ID:-}
-      HUB_ROOM_ID: ${HUB_ROOM_ID}
+      RELAY_HOMESERVER_URL: http://continuwuity:6167
+      RELAY_DOMAIN: ${MATRIX_SERVER_NAME}
+      RELAY_AS_TOKEN: ${RELAY_AS_TOKEN}
+      RELAY_HS_TOKEN: ${RELAY_HS_TOKEN}
+      RELAY_PORTAL_ROOMS: ${PORTAL_ROOMS:-}
+      RELAY_HUB_ROOM_ID: ${HUB_ROOM_ID}
+      RELAY_DB_PATH: /data/relay.db
+    volumes:
+      - relay_data:/data
     depends_on:
       - continuwuity
 
@@ -84,3 +86,4 @@ volumes:
   discord_data:
   signal_data:
   whatsapp_data:
+  relay_data:
