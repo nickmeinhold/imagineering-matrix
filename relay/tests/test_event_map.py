@@ -100,8 +100,8 @@ class TestCleanup:
         # Set created_at to 31 days ago.
         old_ts = time.time() - (31 * 86400)
         await event_map._db.execute(
-            "UPDATE event_map SET created_at = ? WHERE source_event_id = ?",
-            (old_ts, "$old"),
+            "UPDATE event_group_events SET created_at = ? WHERE event_id IN (?, ?)",
+            (old_ts, "$old", "$old_t"),
         )
         await event_map._db.commit()
 

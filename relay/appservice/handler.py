@@ -11,6 +11,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from mautrix.types import EventType
+
 from .loop_prevention import (
     platform_label,
     should_ignore_in_hub,
@@ -53,8 +55,8 @@ class RelayHandler:
         self._portal_rooms = portal_rooms
         self._hub_room_id = hub_room_id
         self._event_map = event_map
-        # sender MXID -> (display_name, avatar_url, fetched_at)
-        self._profile_cache: dict[str, tuple[str, str | None, float]] = {}
+        # (sender MXID, room_id|None) -> (display_name, avatar_url, fetched_at)
+        self._profile_cache: dict[tuple[str, str | None], tuple[str, str | None, float]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,7 +99,7 @@ class RelayHandler:
         room_id: str = event.room_id
         body: str = event.content.body or ""
         source_event_id: str = event.event_id
-        display_name, avatar_url = await self._get_sender_profile(sender)
+        display_name, avatar_url = await self._get_sender_profile(sender, room_id)
         source_label = self._portal_rooms[room_id]
         platform = source_label.lower()
         reply_to = self._get_reply_to(event)
@@ -143,7 +145,7 @@ class RelayHandler:
         body: str = event.content.body or ""
         source_event_id: str = event.event_id
         room_id: str = event.room_id
-        display_name, avatar_url = await self._get_sender_profile(sender)
+        display_name, avatar_url = await self._get_sender_profile(sender, room_id)
         platform = platform_label(sender).lower()
         reply_to = self._get_reply_to(event)
 
@@ -252,7 +254,7 @@ class RelayHandler:
         except (AttributeError, TypeError):
             log.warning("Malformed reaction event from %s in %s", sender, room_id)
             return
-        display_name, avatar_url = await self._get_sender_profile(sender)
+        display_name, avatar_url = await self._get_sender_profile(sender, room_id)
 
         # Determine platform and target rooms.
         if room_id in self._portal_rooms:
@@ -297,7 +299,9 @@ class RelayHandler:
             pass
         return None
 
-    async def _get_sender_profile(self, sender: str) -> tuple[str, str | None]:
+    async def _get_sender_profile(
+        self, sender: str, room_id: str | None = None
+    ) -> tuple[str, str | None]:
         """Fetch the sender's display name and avatar from the homeserver.
 
         Results are cached for :attr:`PROFILE_CACHE_TTL` seconds so that
@@ -313,22 +317,36 @@ class RelayHandler:
             localpart and ``None`` if the profile lookup fails.
         """
         now = time.monotonic()
-        cached = self._profile_cache.get(sender)
+        cache_key = (sender, room_id)
+        cached = self._profile_cache.get(cache_key)
         if cached is not None:
             name, avatar, fetched_at = cached
             if now - fetched_at < self.PROFILE_CACHE_TTL:
                 return name, avatar
+
+        if room_id:
+            try:
+                member = await self._appservice.intent.get_state_event(
+                    room_id, EventType.ROOM_MEMBER, sender
+                )
+                display_name = getattr(member, "displayname", None) or ""
+                avatar_url = getattr(member, "avatar_url", None) or None
+                if display_name:
+                    self._profile_cache[cache_key] = (display_name, avatar_url, now)
+                    return display_name, avatar_url
+            except Exception:
+                log.debug("Member state lookup failed for %s in %s", sender, room_id)
 
         try:
             profile = await self._appservice.intent.get_profile(sender)
             display_name = getattr(profile, "displayname", None) or ""
             avatar_url = getattr(profile, "avatar_url", None) or None
             if display_name:
-                self._profile_cache[sender] = (display_name, avatar_url, now)
+                self._profile_cache[cache_key] = (display_name, avatar_url, now)
                 return display_name, avatar_url
         except Exception:
             log.debug("Profile lookup failed for %s, using localpart", sender)
 
         fallback = sender.split(":")[0].lstrip("@")
-        self._profile_cache[sender] = (fallback, None, now)
+        self._profile_cache[cache_key] = (fallback, None, now)
         return fallback, None

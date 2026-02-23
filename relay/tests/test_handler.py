@@ -103,6 +103,7 @@ def _make_handler(
         raise Exception(f"Unknown profile: {sender}")
 
     appservice.intent.get_profile = AsyncMock(side_effect=_get_profile)
+    appservice.intent.get_state_event = AsyncMock(side_effect=Exception("No member state"))
 
     puppet_manager = AsyncMock()
     puppet_intent = AsyncMock()
