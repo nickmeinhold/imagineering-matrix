@@ -163,6 +163,7 @@ class TestPortalToHub:
             display_name="Alice",
             avatar_url=None,
             room_id=HUB_ROOM,
+            sync_member_state=True,
         )
         # Message was sent to hub room.
         hub_calls = [
@@ -467,3 +468,135 @@ class TestDisplayName:
 
         call = handler._puppet_manager.get_intent.await_args_list[0]
         assert call.kwargs["avatar_url"] == "mxc://example.com/avatar123"
+
+
+# ---------------------------------------------------------------------------
+# Member state scoping (hub vs portal)
+# ---------------------------------------------------------------------------
+
+
+class TestMemberStateScoping:
+    """Member state events are only synced for the hub room, not portals."""
+
+    async def test_hub_room_gets_sync_member_state(self, handler, puppet_intent):
+        """Messages relayed TO the hub should sync member state."""
+        event = _make_message_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            body="hello",
+        )
+
+        await handler.handle_message(event)
+
+        hub_calls = [
+            c for c in handler._puppet_manager.get_intent.await_args_list
+            if c.kwargs.get("room_id") == HUB_ROOM
+        ]
+        assert len(hub_calls) >= 1
+        assert hub_calls[0].kwargs["sync_member_state"] is True
+
+    async def test_portal_room_skips_sync_member_state(self, handler, puppet_intent):
+        """Messages relayed TO a portal should NOT sync member state."""
+        event = _make_message_event(
+            sender="@nick:example.com",
+            room_id=HUB_ROOM,
+            body="hello portals",
+        )
+
+        await handler.handle_message(event)
+
+        portal_calls = [
+            c for c in handler._puppet_manager.get_intent.await_args_list
+            if c.kwargs.get("room_id") in PORTAL_ROOMS
+        ]
+        assert len(portal_calls) >= 1
+        for call in portal_calls:
+            assert call.kwargs["sync_member_state"] is False
+
+    async def test_cross_relay_to_portal_skips_sync(self, handler, puppet_intent):
+        """Cross-relay from one portal to another should NOT sync state."""
+        event = _make_message_event(
+            sender="@_signal_abc:example.com",
+            room_id=SIGNAL_ROOM,
+            body="cross relay",
+        )
+
+        await handler.handle_message(event)
+
+        wa_calls = [
+            c for c in handler._puppet_manager.get_intent.await_args_list
+            if c.kwargs.get("room_id") == WHATSAPP_ROOM
+        ]
+        assert len(wa_calls) >= 1
+        assert wa_calls[0].kwargs["sync_member_state"] is False
+
+
+# ---------------------------------------------------------------------------
+# Media / empty body handling
+# ---------------------------------------------------------------------------
+
+
+class TestMediaMessages:
+    """Messages with no text body (images, stickers) are handled gracefully."""
+
+    async def test_none_body_skipped(self, handler, puppet_intent):
+        """Image-only messages with body=None should not crash."""
+        event = _make_message_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            body="placeholder",
+        )
+        event.content.body = None
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_not_awaited()
+
+    async def test_empty_body_skipped(self, handler, puppet_intent):
+        """Messages with empty string body should not relay."""
+        event = _make_message_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            body="",
+        )
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Malformed reaction handling
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedReactions:
+    """Reactions with missing or broken relates_to don't crash the handler."""
+
+    async def test_reaction_with_no_relates_to(self):
+        handler, puppet_intent = _make_handler()
+        handler._event_map = AsyncMock()
+
+        event = MagicMock()
+        event.sender = "@_whatsapp_12345:example.com"
+        event.room_id = WHATSAPP_ROOM
+        event.content.relates_to = None
+
+        # Should not raise.
+        await handler.handle_reaction(event)
+
+        puppet_intent.react.assert_not_awaited()
+
+    async def test_reaction_with_missing_event_id(self):
+        handler, puppet_intent = _make_handler()
+        handler._event_map = AsyncMock()
+
+        event = MagicMock()
+        event.sender = "@_whatsapp_12345:example.com"
+        event.room_id = WHATSAPP_ROOM
+        # relates_to exists but event_id raises AttributeError.
+        del event.content.relates_to.event_id
+
+        await handler.handle_reaction(event)
+
+        puppet_intent.react.assert_not_awaited()

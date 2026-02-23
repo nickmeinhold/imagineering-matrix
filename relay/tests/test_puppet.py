@@ -1,7 +1,8 @@
 """Unit tests for puppet user management.
 
 Verifies deterministic MXID generation, display name setting (no platform
-suffix), and avatar syncing from portal room member state.
+suffix), avatar syncing, and member state event scoping (hub only for updates,
+single join-with-profile for first entry).
 """
 
 from __future__ import annotations
@@ -128,7 +129,8 @@ class TestGetIntent:
 
         intent.set_displayname.assert_awaited_once_with("Alice")
 
-    async def test_ensures_joined_in_room(self, manager: PuppetManager):
+    async def test_first_join_uses_state_event(self, manager: PuppetManager):
+        """First entry to a room uses a single state event (join + profile)."""
         intent = AsyncMock()
         manager._appservice.intent.user.return_value = intent
 
@@ -139,7 +141,31 @@ class TestGetIntent:
             room_id="!room:example.com",
         )
 
-        intent.ensure_joined.assert_awaited_once_with("!room:example.com")
+        # Joined via state event, not ensure_joined.
+        intent.send_state_event.assert_awaited_once()
+        intent.ensure_joined.assert_not_awaited()
+
+    async def test_subsequent_call_uses_ensure_joined(self, manager: PuppetManager):
+        """Same room + same profile on second call uses ensure_joined."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!room:example.com",
+        )
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!room:example.com",
+        )
+
+        # State event only on first call, ensure_joined on second.
+        assert intent.send_state_event.await_count == 1
+        assert intent.ensure_joined.await_count == 1
 
     async def test_caches_intent(self, manager: PuppetManager):
         """Same puppet MXID returns the same intent on subsequent calls."""
@@ -161,8 +187,8 @@ class TestGetIntent:
 
         # user() is only called once due to caching.
         assert manager._appservice.intent.user.call_count == 1
-        # But ensure_joined is called for each room.
-        assert intent.ensure_joined.await_count == 2
+        # Each new room gets a state event for first join.
+        assert intent.send_state_event.await_count == 2
 
     async def test_display_name_not_updated_when_unchanged(self, manager: PuppetManager):
         """If the display name hasn't changed, don't call set_displayname again."""
@@ -204,3 +230,156 @@ class TestGetIntent:
         )
 
         assert intent.set_displayname.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# First join carries profile (single event)
+# ---------------------------------------------------------------------------
+
+
+class TestFirstJoinProfile:
+    """First entry to any room sends a single m.room.member with profile."""
+
+    async def test_first_join_carries_displayname(self, manager: PuppetManager):
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!portal:example.com",
+        )
+
+        call = intent.send_state_event.await_args
+        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        assert content["displayname"] == "Alice"
+        assert content["membership"] == "join"
+
+    async def test_first_join_carries_avatar(self, manager: PuppetManager):
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            avatar_url="mxc://example.com/avatar",
+            room_id="!portal:example.com",
+        )
+
+        call = intent.send_state_event.await_args
+        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        assert content["avatar_url"] == "mxc://example.com/avatar"
+
+    async def test_first_join_without_avatar(self, manager: PuppetManager):
+        """No avatar URL produces an empty string in the member event."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!portal:example.com",
+        )
+
+        call = intent.send_state_event.await_args
+        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        assert content["avatar_url"] == ""
+
+    async def test_each_room_gets_its_own_first_join(self, manager: PuppetManager):
+        """Joining two different rooms sends a state event for each."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!room1:example.com",
+        )
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!room2:example.com",
+        )
+
+        assert intent.send_state_event.await_count == 2
+        intent.ensure_joined.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Profile update scoping (hub vs portal)
+# ---------------------------------------------------------------------------
+
+
+class TestProfileUpdateScoping:
+    """After first join, profile updates only re-sync in the hub room."""
+
+    async def test_profile_change_resyncs_in_hub(self, manager: PuppetManager):
+        """sync_member_state=True re-sends state event on profile change."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!hub:example.com",
+            sync_member_state=True,
+        )
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice Smith",
+            room_id="!hub:example.com",
+            sync_member_state=True,
+        )
+
+        # First join + profile update = 2 state events.
+        assert intent.send_state_event.await_count == 2
+        intent.ensure_joined.assert_not_awaited()
+
+    async def test_profile_change_skipped_in_portal(self, manager: PuppetManager):
+        """sync_member_state=False skips re-sync on profile change."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice",
+            room_id="!portal:example.com",
+        )
+        await manager.get_intent(
+            platform="whatsapp",
+            sender="@_whatsapp_12345:example.com",
+            display_name="Alice Smith",
+            room_id="!portal:example.com",
+        )
+
+        # Only the first join, not the profile update.
+        assert intent.send_state_event.await_count == 1
+        # Falls back to ensure_joined for the second call.
+        assert intent.ensure_joined.await_count == 1
+
+    async def test_unchanged_profile_uses_ensure_joined(self, manager: PuppetManager):
+        """Same profile on repeated calls uses ensure_joined (no-op)."""
+        intent = AsyncMock()
+        manager._appservice.intent.user.return_value = intent
+
+        for _ in range(3):
+            await manager.get_intent(
+                platform="whatsapp",
+                sender="@_whatsapp_12345:example.com",
+                display_name="Alice",
+                room_id="!hub:example.com",
+                sync_member_state=True,
+            )
+
+        # State event only on first call.
+        assert intent.send_state_event.await_count == 1
+        # ensure_joined on subsequent 2 calls.
+        assert intent.ensure_joined.await_count == 2
