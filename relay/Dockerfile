@@ -4,6 +4,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY relay_bot.py .
+COPY appservice/ appservice/
 
-CMD ["python", "-u", "relay_bot.py"]
+VOLUME /data
+
+CMD ["python", "-u", "-m", "appservice"]

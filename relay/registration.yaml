@@ -1,0 +1,21 @@
+# Appservice registration for the relay bot.
+#
+# Register with Continuwuity via the admin room:
+#   !admin appservices register
+#   <paste this file's contents>
+#
+# Generate tokens:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+
+id: relay-bot
+url: http://relay-bot:8009
+as_token: CHANGE_ME_AS_TOKEN
+hs_token: CHANGE_ME_HS_TOKEN
+sender_localpart: relay-bot
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@_relay_.*:CHANGE_ME_DOMAIN"
+  aliases: []
+  rooms: []
+rate_limited: false
