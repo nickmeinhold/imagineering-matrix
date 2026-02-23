@@ -252,9 +252,9 @@ class TestFirstJoinProfile:
         )
 
         call = intent.send_state_event.await_args
-        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        content = call.args[2] if len(call.args) > 2 else call.kwargs.get("content")
         assert content["displayname"] == "Alice"
-        assert content["membership"] == "join"
+        assert str(content["membership"]) == "join"
 
     async def test_first_join_carries_avatar(self, manager: PuppetManager):
         intent = AsyncMock()
@@ -269,7 +269,7 @@ class TestFirstJoinProfile:
         )
 
         call = intent.send_state_event.await_args
-        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        content = call.args[2] if len(call.args) > 2 else call.kwargs.get("content")
         assert content["avatar_url"] == "mxc://example.com/avatar"
 
     async def test_first_join_without_avatar(self, manager: PuppetManager):
@@ -285,7 +285,7 @@ class TestFirstJoinProfile:
         )
 
         call = intent.send_state_event.await_args
-        content = call.args[3] if len(call.args) > 3 else call.kwargs.get("content")
+        content = call.args[2] if len(call.args) > 2 else call.kwargs.get("content")
         assert content["avatar_url"] == ""
 
     async def test_each_room_gets_its_own_first_join(self, manager: PuppetManager):

@@ -11,7 +11,7 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
-from mautrix.types import EventType
+from mautrix.types import EventType, MemberStateEventContent, Membership
 
 if TYPE_CHECKING:
     from mautrix.appservice import AppService
@@ -155,13 +155,14 @@ class PuppetManager:
         A single event that sets membership, display name, and avatar in one
         shot — avoiding the two-event pattern that breaks bridge portals.
         """
+        content = MemberStateEventContent(
+            membership=Membership.JOIN,
+            displayname=display_name,
+            avatar_url=avatar_url or "",
+        )
         await intent.send_state_event(
             room_id,
             EventType.ROOM_MEMBER,
-            mxid,
-            content={
-                "membership": "join",
-                "displayname": display_name,
-                "avatar_url": avatar_url or "",
-            },
+            content,
+            state_key=mxid,
         )
