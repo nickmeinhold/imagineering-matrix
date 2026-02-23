@@ -61,6 +61,7 @@ class PuppetManager:
         display_name: str,
         avatar_url: str | None = None,
         room_id: str,
+        sync_member_state: bool = False,
     ) -> IntentAPI:
         """Return an :class:`IntentAPI` for the puppet, ensuring it is ready.
 
@@ -69,12 +70,19 @@ class PuppetManager:
         - Sets its display name (just the name, no platform suffix).
         - Sets its avatar URL if provided.
 
-        On every call:
-        - Ensures the puppet has joined *room_id*.
-        - Updates the display name or avatar if they have changed.
-        - Syncs the room member state event so bridges see the correct
-          display name and avatar (they read member state, not the global
-          profile).
+        Room join strategy (avoids breaking bridge-managed portal rooms):
+
+        - **First entry** to any room: a single ``m.room.member`` state event
+          that both joins the room AND carries the display name and avatar.
+          This produces only one member event (not a bare join followed by a
+          separate profile update), which is safe for bridge portals.
+        - **Subsequent calls**, profile unchanged: ``ensure_joined`` (no-op
+          if already in the room; safety net if the puppet was kicked).
+        - **Profile changed**, hub room (``sync_member_state=True``):
+          re-send the member state event so bridges see the new name/avatar.
+        - **Profile changed**, portal room (``sync_member_state=False``):
+          only update the global profile; don't re-send member state to
+          avoid disrupting bridge-managed rooms.
 
         Args:
             platform: Platform label in lowercase (e.g. ``"whatsapp"``).
@@ -82,6 +90,9 @@ class PuppetManager:
             display_name: The sender's display name (no platform suffix).
             avatar_url: The sender's ``mxc://`` avatar URL, or ``None``.
             room_id: The room to ensure the puppet has joined.
+            sync_member_state: If True, re-send the ``m.room.member`` state
+                event when the profile changes.  Use for rooms we control
+                (hub room); portal rooms should pass False.
         """
         mxid = self.mxid_for(platform, sender)
 
@@ -103,26 +114,54 @@ class PuppetManager:
                 await intent.set_avatar_url(avatar_url or "")
                 self._avatar_urls[mxid] = avatar_url
 
-        await intent.ensure_joined(room_id)
-
-        # Bridges (WhatsApp, Discord, etc.) read display names and avatars
-        # from the m.room.member state event, NOT the global profile.
-        # Continuwuity doesn't auto-propagate profile changes into room
-        # member events, so we explicitly update the state when the profile
-        # differs from what we last wrote for this (puppet, room) pair.
+        # Bridges read display names and avatars from the m.room.member
+        # state event, NOT the global profile.  Continuwuity doesn't
+        # auto-propagate profile changes into room member events.
+        #
+        # Strategy: on first entry to a room, send a SINGLE m.room.member
+        # state event that both joins AND carries the profile.  This avoids
+        # the two-event pattern (bare join + separate state update) that
+        # crashed bridge-managed portal rooms.  For subsequent profile
+        # changes, only re-sync in the hub room (sync_member_state=True).
         current_profile = (display_name, avatar_url)
         member_key = (mxid, room_id)
-        if self._member_profiles.get(member_key) != current_profile:
-            await intent.send_state_event(
-                room_id,
-                EventType.ROOM_MEMBER,
-                mxid,
-                content={
-                    "membership": "join",
-                    "displayname": display_name,
-                    "avatar_url": avatar_url or "",
-                },
-            )
+        cached = self._member_profiles.get(member_key)
+
+        if cached is None:
+            # First entry: single state event = join + profile.
+            await self._send_member_event(intent, mxid, room_id, display_name, avatar_url)
             self._member_profiles[member_key] = current_profile
+        elif cached != current_profile and sync_member_state:
+            # Profile changed in a room we control — re-sync state.
+            await self._send_member_event(intent, mxid, room_id, display_name, avatar_url)
+            self._member_profiles[member_key] = current_profile
+        else:
+            # Already joined with current profile (or portal with stale
+            # profile).  Just ensure membership as a safety net.
+            await intent.ensure_joined(room_id)
 
         return intent
+
+    @staticmethod
+    async def _send_member_event(
+        intent: IntentAPI,
+        mxid: str,
+        room_id: str,
+        display_name: str,
+        avatar_url: str | None,
+    ) -> None:
+        """Send a ``m.room.member`` state event that joins with profile info.
+
+        A single event that sets membership, display name, and avatar in one
+        shot — avoiding the two-event pattern that breaks bridge portals.
+        """
+        await intent.send_state_event(
+            room_id,
+            EventType.ROOM_MEMBER,
+            mxid,
+            content={
+                "membership": "join",
+                "displayname": display_name,
+                "avatar_url": avatar_url or "",
+            },
+        )

@@ -67,8 +67,13 @@ class RelayHandler:
         """
         room_id: str = event.room_id
         sender: str = event.sender
-        body: str = event.content.body
+        body: str = event.content.body or ""
         bot_mxid: str = self._appservice.bot_mxid
+
+        if not body:
+            # Media-only messages (images, stickers) have no text body.
+            # Nothing to relay as text — skip silently.
+            return
 
         if room_id in self._portal_rooms:
             if should_ignore_in_portal(sender, body, bot_mxid):
@@ -90,7 +95,7 @@ class RelayHandler:
         """Relay a portal message to the hub and to other portal rooms."""
         sender: str = event.sender
         room_id: str = event.room_id
-        body: str = event.content.body
+        body: str = event.content.body or ""
         source_event_id: str = event.event_id
         display_name, avatar_url = await self._get_sender_profile(sender)
         source_label = self._portal_rooms[room_id]
@@ -135,7 +140,7 @@ class RelayHandler:
     async def _relay_from_hub(self, event) -> None:
         """Fan out a hub message to all portal rooms."""
         sender: str = event.sender
-        body: str = event.content.body
+        body: str = event.content.body or ""
         source_event_id: str = event.event_id
         room_id: str = event.room_id
         display_name, avatar_url = await self._get_sender_profile(sender)
@@ -184,6 +189,7 @@ class RelayHandler:
                 display_name=display_name,
                 avatar_url=avatar_url,
                 room_id=room_id,
+                sync_member_state=(room_id == self._hub_room_id),
             )
 
             # Check if this is a reply and we have a mapped target event.
@@ -240,8 +246,12 @@ class RelayHandler:
         else:
             return
 
-        reacted_to = event.content.relates_to.event_id
-        reaction_key = event.content.relates_to.key
+        try:
+            reacted_to = event.content.relates_to.event_id
+            reaction_key = event.content.relates_to.key
+        except (AttributeError, TypeError):
+            log.warning("Malformed reaction event from %s in %s", sender, room_id)
+            return
         display_name, avatar_url = await self._get_sender_profile(sender)
 
         # Determine platform and target rooms.
@@ -266,6 +276,7 @@ class RelayHandler:
                     display_name=display_name,
                     avatar_url=avatar_url,
                     room_id=target_room,
+                    sync_member_state=(target_room == self._hub_room_id),
                 )
                 await intent.react(target_room, mapped_event, reaction_key)
                 log.info(
