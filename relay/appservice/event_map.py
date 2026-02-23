@@ -81,7 +81,7 @@ class EventMap:
         direction (replies/reactions from any room).
         """
         assert self._db is not None
-        now = created_at or time.time()
+        now = time.time() if created_at is None else created_at
         group_id = await self._ensure_group(source_event_id, target_event_id, now)
         await self._upsert_event(group_id, source_room_id, source_event_id, now)
         await self._upsert_event(group_id, target_room_id, target_event_id, now)
@@ -212,12 +212,6 @@ class EventMap:
         legacy_exists = await self._table_exists("event_map")
         if not legacy_exists:
             return
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM event_group_events",
-        )
-        row = await cursor.fetchone()
-        if row and row[0] > 0:
-            return
 
         cursor = await self._db.execute(
             "SELECT source_event_id, source_room_id, target_event_id, target_room_id, created_at "
@@ -225,6 +219,8 @@ class EventMap:
         )
         rows = await cursor.fetchall()
         if not rows:
+            await self._db.execute("DROP TABLE event_map")
+            await self._db.commit()
             return
         for source_event_id, source_room_id, target_event_id, target_room_id, created_at in rows:
             await self.store(
@@ -234,6 +230,8 @@ class EventMap:
                 target_room_id,
                 created_at=created_at,
             )
+        await self._db.execute("DROP TABLE event_map")
+        await self._db.commit()
         log.info("Migrated %d legacy event mappings", len(rows))
 
     async def _table_exists(self, table: str) -> bool:
