@@ -222,16 +222,20 @@ class TestMultiPortalLoopPrevention:
 
         client.room_send.assert_not_awaited()
 
-    async def test_bridge_puppet_in_signal_portal_ignored(
+    async def test_bridge_puppet_in_signal_portal_relayed(
         self, on_message, client: AsyncMock,
     ):
-        """Layer 2: bridge puppet messages are ignored in the Signal portal."""
-        room = FakeRoom(room_id=SIGNAL_ROOM)
+        """Layer 2a: bridge puppets in portal rooms are relayed (they are
+        the real users in megabridge portals)."""
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={"@_signal_456:example.com": FakeUser(display_name="Puppet")},
+        )
         event = FakeEvent(sender="@_signal_456:example.com", body="puppet")
 
         await on_message(room, event)
 
-        client.room_send.assert_not_awaited()
+        assert client.room_send.await_count > 0
 
     async def test_attributed_message_in_signal_portal_ignored(
         self, on_message, client: AsyncMock,
@@ -396,3 +400,106 @@ class TestPortalToPortal:
 
         # All 3 targets attempted: hub + 2 other portals.
         assert client.room_send.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Portal puppet relay (context-dependent layer 2)
+# ---------------------------------------------------------------------------
+
+
+class TestPortalPuppetRelay:
+    """Bridge puppets in portal rooms should be relayed, not filtered.
+
+    Megabridge puppets (e.g. ``@_whatsapp_12345:domain``) ARE the real users
+    in portal rooms.  Only bridge bots should be filtered there.  In the hub
+    room, both bots and puppets should still be filtered.
+    """
+
+    async def test_whatsapp_puppet_in_portal_relayed_to_hub(
+        self, on_message, client: AsyncMock,
+    ):
+        """A WhatsApp puppet in the WA portal is relayed to the hub room."""
+        room = FakeRoom(
+            room_id=WHATSAPP_ROOM,
+            users={
+                "@_whatsapp_12345:example.com": FakeUser(display_name="Alice"),
+            },
+        )
+        event = FakeEvent(
+            sender="@_whatsapp_12345:example.com", body="hello from WA",
+        )
+
+        await on_message(room, event)
+
+        hub_calls = [
+            c for c in client.room_send.await_args_list if c[0][0] == HUB_ROOM
+        ]
+        assert len(hub_calls) == 1
+        assert hub_calls[0][1]["content"]["body"] == (
+            "**Alice (WhatsApp):** hello from WA"
+        )
+
+    async def test_whatsapp_puppet_in_portal_cross_relayed(
+        self, on_message, client: AsyncMock,
+    ):
+        """A WhatsApp puppet in the WA portal is cross-relayed to Signal."""
+        room = FakeRoom(
+            room_id=WHATSAPP_ROOM,
+            users={
+                "@_whatsapp_12345:example.com": FakeUser(display_name="Alice"),
+            },
+        )
+        event = FakeEvent(
+            sender="@_whatsapp_12345:example.com", body="cross relay test",
+        )
+
+        await on_message(room, event)
+
+        target_rooms = {c[0][0] for c in client.room_send.await_args_list}
+        assert SIGNAL_ROOM in target_rooms
+
+    async def test_signal_puppet_in_portal_relayed(
+        self, on_message, client: AsyncMock,
+    ):
+        """A Signal puppet in the Signal portal reaches hub + WA portal."""
+        room = FakeRoom(
+            room_id=SIGNAL_ROOM,
+            users={
+                "@_signal_abc:example.com": FakeUser(display_name="Bob"),
+            },
+        )
+        event = FakeEvent(
+            sender="@_signal_abc:example.com", body="hello from Signal",
+        )
+
+        await on_message(room, event)
+
+        target_rooms = {c[0][0] for c in client.room_send.await_args_list}
+        assert HUB_ROOM in target_rooms
+        assert WHATSAPP_ROOM in target_rooms
+
+    async def test_bridge_bot_in_portal_still_ignored(
+        self, on_message, client: AsyncMock,
+    ):
+        """Bridge bots (e.g. @whatsappbot:) in a portal are still ignored."""
+        room = FakeRoom(room_id=WHATSAPP_ROOM)
+        event = FakeEvent(
+            sender="@whatsappbot:example.com", body="bot noise",
+        )
+
+        await on_message(room, event)
+
+        client.room_send.assert_not_awaited()
+
+    async def test_puppet_in_hub_still_ignored(
+        self, on_message, client: AsyncMock,
+    ):
+        """Puppets in the hub room are still filtered (no regression)."""
+        room = FakeRoom(room_id=HUB_ROOM)
+        event = FakeEvent(
+            sender="@_discord_999:example.com", body="puppet in hub",
+        )
+
+        await on_message(room, event)
+
+        client.room_send.assert_not_awaited()
