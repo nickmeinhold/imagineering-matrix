@@ -86,7 +86,7 @@ class RelayHandler:
         room_id: str = event.room_id
         body: str = event.content.body
         source_event_id: str = event.event_id
-        display_name = self._display_name(event)
+        display_name, avatar_url = await self._get_sender_profile(sender)
         source_label = self._portal_rooms[room_id]
         platform = source_label.lower()
         reply_to = self._get_reply_to(event)
@@ -96,6 +96,7 @@ class RelayHandler:
             platform=platform,
             sender=sender,
             display_name=display_name,
+            avatar_url=avatar_url,
             room_id=self._hub_room_id,
             body=body,
             reply_to_source=reply_to,
@@ -114,6 +115,7 @@ class RelayHandler:
                 platform=platform,
                 sender=sender,
                 display_name=display_name,
+                avatar_url=avatar_url,
                 room_id=portal_id,
                 body=body,
                 reply_to_source=reply_to,
@@ -130,7 +132,7 @@ class RelayHandler:
         body: str = event.content.body
         source_event_id: str = event.event_id
         room_id: str = event.room_id
-        display_name = self._display_name(event)
+        display_name, avatar_url = await self._get_sender_profile(sender)
         platform = platform_label(sender).lower()
         reply_to = self._get_reply_to(event)
 
@@ -139,6 +141,7 @@ class RelayHandler:
                 platform=platform,
                 sender=sender,
                 display_name=display_name,
+                avatar_url=avatar_url,
                 room_id=portal_id,
                 body=body,
                 reply_to_source=reply_to,
@@ -155,6 +158,7 @@ class RelayHandler:
         platform: str,
         sender: str,
         display_name: str,
+        avatar_url: str | None = None,
         room_id: str,
         body: str,
         reply_to_source: str | None = None,
@@ -172,6 +176,7 @@ class RelayHandler:
                 platform=platform,
                 sender=sender,
                 display_name=display_name,
+                avatar_url=avatar_url,
                 room_id=room_id,
             )
 
@@ -231,7 +236,7 @@ class RelayHandler:
 
         reacted_to = event.content.relates_to.event_id
         reaction_key = event.content.relates_to.key
-        display_name = self._display_name(event)
+        display_name, avatar_url = await self._get_sender_profile(sender)
 
         # Determine platform and target rooms.
         if room_id in self._portal_rooms:
@@ -253,6 +258,7 @@ class RelayHandler:
                     platform=platform,
                     sender=sender,
                     display_name=display_name,
+                    avatar_url=avatar_url,
                     room_id=target_room,
                 )
                 await intent.react(target_room, mapped_event, reaction_key)
@@ -274,13 +280,23 @@ class RelayHandler:
             pass
         return None
 
-    @staticmethod
-    def _display_name(event) -> str:
-        """Extract the display name from an event.
+    async def _get_sender_profile(self, sender: str) -> tuple[str, str | None]:
+        """Fetch the sender's display name and avatar from the homeserver.
 
-        Uses the ``_display_name`` attribute attached by tests or falls back
-        to extracting the localpart from the sender MXID.
+        Queries the profile via the appservice bot intent so we get the real
+        display name that the mautrix bridge already set (e.g. "Alice") instead
+        of the raw MXID localpart (e.g. "signal_1f11a469-eb2d-4c50-…").
+
+        Returns:
+            A ``(display_name, avatar_url)`` tuple.  Falls back to the MXID
+            localpart and ``None`` if the profile lookup fails.
         """
-        if hasattr(event, "_display_name") and event._display_name:
-            return event._display_name
-        return event.sender.split(":")[0].lstrip("@")
+        try:
+            profile = await self._appservice.intent.get_profile(sender)
+            display_name = getattr(profile, "displayname", None) or ""
+            avatar_url = getattr(profile, "avatar_url", None) or None
+            if display_name:
+                return display_name, avatar_url
+        except Exception:
+            log.debug("Profile lookup failed for %s, using localpart", sender)
+        return sender.split(":")[0].lstrip("@"), None
