@@ -45,7 +45,6 @@ def _make_message_event(
     room_id: str,
     body: str,
     event_id: str = "$evt1",
-    display_name: str | None = None,
 ) -> MagicMock:
     """Build a mock mautrix MessageEvent."""
     event = MagicMock()
@@ -58,26 +57,52 @@ def _make_message_event(
     event.content.body = body
     event.content.relates_to = None
 
-    # State event for display name lookup — stored in event.unsigned or
-    # retrieved by the handler via intent.  We attach it as an attribute
-    # so the handler's _display_name helper can use it.
-    event._display_name = display_name or sender.split(":")[0].lstrip("@")
-
     return event
+
+
+def _make_profile(displayname: str, avatar_url: str | None = None) -> MagicMock:
+    """Build a mock profile response."""
+    profile = MagicMock()
+    profile.displayname = displayname
+    profile.avatar_url = avatar_url
+    return profile
+
+
+# Default profiles keyed by sender MXID.  Tests can override via
+# ``appservice.intent.get_profile.side_effect``.
+_DEFAULT_PROFILES: dict[str, MagicMock] = {
+    "@_whatsapp_12345:example.com": _make_profile("Alice"),
+    "@_signal_abc:example.com": _make_profile("Bob"),
+    "@nick:example.com": _make_profile("Nick"),
+}
 
 
 def _make_handler(
     portal_rooms: dict[str, str] | None = None,
     hub_room: str = HUB_ROOM,
+    profiles: dict[str, MagicMock] | None = None,
 ) -> tuple[RelayHandler, AsyncMock]:
     """Build a RelayHandler with a mocked puppet manager.
 
     Returns (handler, puppet_intent) where puppet_intent is the mock intent
     returned by ``puppet_manager.get_intent()``.
+
+    The appservice intent's ``get_profile`` is wired to return display names
+    from *profiles* (defaults to ``_DEFAULT_PROFILES``).  Unknown senders
+    raise an ``Exception`` so the handler falls back to the MXID localpart.
     """
+    merged_profiles = {**_DEFAULT_PROFILES, **(profiles or {})}
+
     appservice = MagicMock()
     appservice.bot_mxid = BOT_MXID
     appservice.intent = MagicMock()
+
+    async def _get_profile(sender: str):
+        if sender in merged_profiles and merged_profiles[sender] is not None:
+            return merged_profiles[sender]
+        raise Exception(f"Unknown profile: {sender}")
+
+    appservice.intent.get_profile = AsyncMock(side_effect=_get_profile)
 
     puppet_manager = AsyncMock()
     puppet_intent = AsyncMock()
@@ -127,7 +152,6 @@ class TestPortalToHub:
             sender="@_whatsapp_12345:example.com",
             room_id=WHATSAPP_ROOM,
             body="hello from WhatsApp",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
@@ -137,6 +161,7 @@ class TestPortalToHub:
             platform="whatsapp",
             sender="@_whatsapp_12345:example.com",
             display_name="Alice",
+            avatar_url=None,
             room_id=HUB_ROOM,
         )
         # Message was sent to hub room.
@@ -152,7 +177,6 @@ class TestPortalToHub:
             sender="@_signal_abc:example.com",
             room_id=SIGNAL_ROOM,
             body="hello from Signal",
-            display_name="Bob",
         )
 
         await handler.handle_message(event)
@@ -178,7 +202,6 @@ class TestHubToPortals:
             sender="@nick:example.com",
             room_id=HUB_ROOM,
             body="hey everyone",
-            display_name="Nick",
         )
 
         await handler.handle_message(event)
@@ -196,7 +219,6 @@ class TestHubToPortals:
             sender="@nick:example.com",
             room_id=HUB_ROOM,
             body="hi all",
-            display_name="Nick",
         )
 
         await handler.handle_message(event)
@@ -219,7 +241,6 @@ class TestPortalToPortal:
             sender="@_signal_abc:example.com",
             room_id=SIGNAL_ROOM,
             body="hi from Signal",
-            display_name="Bob",
         )
 
         await handler.handle_message(event)
@@ -235,7 +256,6 @@ class TestPortalToPortal:
             sender="@_signal_abc:example.com",
             room_id=SIGNAL_ROOM,
             body="no echo",
-            display_name="Bob",
         )
 
         await handler.handle_message(event)
@@ -294,7 +314,6 @@ class TestLoopPrevention:
             sender="@_whatsapp_12345:example.com",
             room_id=WHATSAPP_ROOM,
             body="real user message",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
@@ -349,7 +368,6 @@ class TestFanOutResilience:
             sender="@nick:example.com",
             room_id=HUB_ROOM,
             body="resilience test",
-            display_name="Nick",
         )
 
         # First send fails, second succeeds.
@@ -377,7 +395,6 @@ class TestFanOutResilience:
             sender="@_signal_abc:example.com",
             room_id=SIGNAL_ROOM,
             body="resilience",
-            display_name="Bob",
         )
 
         # Hub OK, first cross-relay fails, second OK.
@@ -399,32 +416,54 @@ class TestFanOutResilience:
 
 
 class TestDisplayName:
-    """The handler resolves display names from the event."""
+    """The handler resolves display names via homeserver profile lookup."""
 
-    async def test_uses_display_name_from_event(self, handler, puppet_intent):
+    async def test_uses_display_name_from_profile(self, handler, puppet_intent):
+        """Profile lookup returns the real name set by the mautrix bridge."""
         event = _make_message_event(
             sender="@_whatsapp_12345:example.com",
             room_id=WHATSAPP_ROOM,
             body="hello",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
 
-        # Verify the puppet was requested with the correct display name.
+        # Verify the puppet was requested with the profile display name.
         call = handler._puppet_manager.get_intent.await_args_list[0]
         assert call.kwargs["display_name"] == "Alice"
 
-    async def test_falls_back_to_localpart(self, handler, puppet_intent):
-        """When no display name is available, use the MXID localpart."""
+    async def test_falls_back_to_localpart_on_profile_failure(self):
+        """When profile lookup fails, fall back to the MXID localpart."""
+        handler, puppet_intent = _make_handler(
+            profiles={"@_unknown_xyz:example.com": None},  # will not match
+        )
         event = _make_message_event(
-            sender="@_whatsapp_12345:example.com",
+            sender="@_unknown_xyz:example.com",
             room_id=WHATSAPP_ROOM,
             body="hello",
-            # display_name defaults to localpart via helper
         )
 
         await handler.handle_message(event)
 
         call = handler._puppet_manager.get_intent.await_args_list[0]
-        assert call.kwargs["display_name"] == "_whatsapp_12345"
+        assert call.kwargs["display_name"] == "_unknown_xyz"
+
+    async def test_avatar_url_passed_to_puppet(self, puppet_intent):
+        """Avatar URL from the profile is forwarded to the puppet manager."""
+        handler, puppet_intent = _make_handler(
+            profiles={
+                "@_whatsapp_12345:example.com": _make_profile(
+                    "Alice", avatar_url="mxc://example.com/avatar123",
+                ),
+            },
+        )
+        event = _make_message_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            body="hello",
+        )
+
+        await handler.handle_message(event)
+
+        call = handler._puppet_manager.get_intent.await_args_list[0]
+        assert call.kwargs["avatar_url"] == "mxc://example.com/avatar123"

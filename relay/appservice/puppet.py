@@ -33,6 +33,8 @@ class PuppetManager:
         self._intents: dict[str, IntentAPI] = {}
         # Cache: puppet_mxid -> last display name set
         self._display_names: dict[str, str] = {}
+        # Cache: puppet_mxid -> last avatar URL set
+        self._avatar_urls: dict[str, str | None] = {}
 
     def mxid_for(self, platform: str, sender: str) -> str:
         """Return a deterministic puppet MXID for *sender* on *platform*.
@@ -50,6 +52,7 @@ class PuppetManager:
         platform: str,
         sender: str,
         display_name: str,
+        avatar_url: str | None = None,
         room_id: str,
     ) -> IntentAPI:
         """Return an :class:`IntentAPI` for the puppet, ensuring it is ready.
@@ -57,15 +60,17 @@ class PuppetManager:
         On first call for a puppet:
         - Registers the puppet user on the homeserver.
         - Sets its display name (just the name, no platform suffix).
+        - Sets its avatar URL if provided.
 
         On every call:
         - Ensures the puppet has joined *room_id*.
-        - Updates the display name if it has changed.
+        - Updates the display name or avatar if they have changed.
 
         Args:
             platform: Platform label in lowercase (e.g. ``"whatsapp"``).
             sender: The original sender's MXID.
             display_name: The sender's display name (no platform suffix).
+            avatar_url: The sender's ``mxc://`` avatar URL, or ``None``.
             room_id: The room to ensure the puppet has joined.
         """
         mxid = self.mxid_for(platform, sender)
@@ -76,11 +81,17 @@ class PuppetManager:
             await intent.set_displayname(display_name)
             self._intents[mxid] = intent
             self._display_names[mxid] = display_name
+            if avatar_url:
+                await intent.set_avatar_url(avatar_url)
+            self._avatar_urls[mxid] = avatar_url
         else:
             intent = self._intents[mxid]
             if self._display_names.get(mxid) != display_name:
                 await intent.set_displayname(display_name)
                 self._display_names[mxid] = display_name
+            if self._avatar_urls.get(mxid) != avatar_url:
+                await intent.set_avatar_url(avatar_url or "")
+                self._avatar_urls[mxid] = avatar_url
 
         await intent.ensure_joined(room_id)
         return intent

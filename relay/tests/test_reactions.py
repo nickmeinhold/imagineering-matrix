@@ -40,7 +40,6 @@ def _make_reaction_event(
     room_id: str,
     reacted_to: str,
     key: str = "\U0001f44d",
-    display_name: str | None = None,
 ) -> MagicMock:
     """Build a mock reaction event."""
     event = MagicMock()
@@ -49,7 +48,6 @@ def _make_reaction_event(
     event.event_id = "$reaction_evt"
     event.content.relates_to.event_id = reacted_to
     event.content.relates_to.key = key
-    event._display_name = display_name or sender.split(":")[0].lstrip("@")
     return event
 
 
@@ -108,7 +106,6 @@ class TestReactionFromPortal:
             room_id=WHATSAPP_ROOM,
             reacted_to="$wa_msg",
             key="\U0001f44d",
-            display_name="Alice",
         )
 
         await handler.handle_reaction(event)
@@ -127,7 +124,6 @@ class TestReactionFromPortal:
             room_id=WHATSAPP_ROOM,
             reacted_to="$wa_msg",
             key="\u2764\ufe0f",
-            display_name="Alice",
         )
 
         await handler.handle_reaction(event)
@@ -154,7 +150,6 @@ class TestReactionFromHub:
             room_id=HUB_ROOM,
             reacted_to="$hub_msg",
             key="\U0001f44d",
-            display_name="Nick",
         )
 
         await handler.handle_reaction(event)
@@ -252,7 +247,6 @@ class TestUnmappedReactions:
             sender="@_whatsapp_12345:example.com",
             room_id=WHATSAPP_ROOM,
             reacted_to="$unknown_msg",
-            display_name="Alice",
         )
 
         # Must not raise.
@@ -283,7 +277,6 @@ class TestReactionResilience:
             sender="@nick:example.com",
             room_id=HUB_ROOM,
             reacted_to="$hub_msg",
-            display_name="Nick",
         )
 
         # Must not raise.

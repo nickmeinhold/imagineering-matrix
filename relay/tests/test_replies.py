@@ -41,7 +41,6 @@ def _make_message_event(
     body: str,
     event_id: str = "$evt1",
     reply_to: str | None = None,
-    display_name: str | None = None,
 ) -> MagicMock:
     """Build a mock MessageEvent, optionally with m.in_reply_to."""
     event = MagicMock()
@@ -56,7 +55,6 @@ def _make_message_event(
     else:
         event.content.relates_to = None
 
-    event._display_name = display_name or sender.split(":")[0].lstrip("@")
     return event
 
 
@@ -116,7 +114,6 @@ class TestEventIdMapping:
             room_id=WHATSAPP_ROOM,
             body="hello",
             event_id="$wa_evt1",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
@@ -135,7 +132,6 @@ class TestEventIdMapping:
             room_id=HUB_ROOM,
             body="hey",
             event_id="$hub_evt1",
-            display_name="Nick",
         )
 
         await handler.handle_message(event)
@@ -171,7 +167,6 @@ class TestReplyRelay:
             body="this is a reply",
             event_id="$reply_wa",
             reply_to="$original_wa",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
@@ -189,7 +184,6 @@ class TestReplyRelay:
             body="replying to unknown",
             event_id="$reply_wa",
             reply_to="$unmapped_event",
-            display_name="Alice",
         )
 
         await handler.handle_message(event)
@@ -216,7 +210,6 @@ class TestReplyRelay:
             body="hub reply",
             event_id="$hub_reply",
             reply_to="$hub_orig",
-            display_name="Nick",
         )
 
         await handler.handle_message(event)
