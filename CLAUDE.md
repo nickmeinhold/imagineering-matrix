@@ -146,6 +146,7 @@ All config is via `CONTINUWUITY_` environment variables in docker-compose.yml. K
 | `CONTINUWUITY_ALLOW_FEDERATION` | `true` | Federate with other servers |
 | `CONTINUWUITY_TRUSTED_SERVERS` | `[]` | Servers to fetch keys from |
 | `CONTINUWUITY_MAX_REQUEST_SIZE` | `20971520` | Max upload size (bytes) |
+| `CONTINUWUITY_NEW_USER_DISPLAYNAME_SUFFIX` | `🏳️‍⚧️` | Text appended to display name on registration (set `""` to disable) |
 | `CONTINUWUITY_LOG` | `info` | Log level |
 
 Full reference: https://continuwuity.org/reference/config
