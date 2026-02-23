@@ -13,6 +13,7 @@ services:
       CONTINUWUITY_REGISTRATION_TOKEN: ${REGISTRATION_TOKEN}
       CONTINUWUITY_ALLOW_FEDERATION: "false"
       CONTINUWUITY_MAX_REQUEST_SIZE: "20971520"
+      CONTINUWUITY_NEW_USER_DISPLAYNAME_SUFFIX: ""
       CONTINUWUITY_LOG: "info"
     volumes:
       - continuwuity_data:/var/lib/continuwuity
