@@ -601,3 +601,119 @@ class TestMalformedReactions:
         await handler.handle_reaction(event)
 
         puppet_intent.react.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Double puppet resolution
+# ---------------------------------------------------------------------------
+
+SIGNAL_PUPPET_MXID = "@signal_uuid123:example.com"
+WHATSAPP_PUPPET_MXID = "@whatsapp_456:example.com"
+DOUBLE_PUPPET_MAP = {
+    "@nick:example.com": [SIGNAL_PUPPET_MXID, WHATSAPP_PUPPET_MXID],
+}
+
+
+def _make_handler_with_double_puppets(
+    profiles: dict[str, MagicMock] | None = None,
+) -> tuple[RelayHandler, AsyncMock]:
+    """Build a handler with double puppet mapping configured."""
+    merged_profiles = {
+        **_DEFAULT_PROFILES,
+        SIGNAL_PUPPET_MXID: _make_profile("Nick Meinhold", "mxc://example.com/signal_avatar"),
+        WHATSAPP_PUPPET_MXID: _make_profile("Nick", "mxc://example.com/wa_avatar"),
+        **(profiles or {}),
+    }
+
+    appservice = MagicMock()
+    appservice.bot_mxid = BOT_MXID
+    appservice.intent = MagicMock()
+
+    async def _get_profile(sender: str):
+        if sender in merged_profiles and merged_profiles[sender] is not None:
+            return merged_profiles[sender]
+        raise Exception(f"Unknown profile: {sender}")
+
+    appservice.intent.get_profile = AsyncMock(side_effect=_get_profile)
+    appservice.intent.get_state_event = AsyncMock(
+        side_effect=Exception("No member state"),
+    )
+
+    puppet_manager = AsyncMock()
+    puppet_intent = AsyncMock()
+    puppet_intent.send_text = AsyncMock(return_value="$relayed_evt")
+    puppet_manager.get_intent.return_value = puppet_intent
+
+    handler = RelayHandler(
+        appservice=appservice,
+        puppet_manager=puppet_manager,
+        portal_rooms=PORTAL_ROOMS,
+        hub_room_id=HUB_ROOM,
+        double_puppet_map=DOUBLE_PUPPET_MAP,
+    )
+
+    return handler, puppet_intent
+
+
+class TestDoublePuppetResolution:
+    """Double-puppeted users get platform-specific names and avatars."""
+
+    async def test_signal_portal_resolves_signal_puppet(self):
+        handler, puppet_intent = _make_handler_with_double_puppets()
+        event = _make_message_event("@nick:example.com", SIGNAL_ROOM, "hello")
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+        call_kwargs = handler._puppet_manager.get_intent.call_args_list[0].kwargs
+        assert call_kwargs["display_name"] == "Nick Meinhold"
+        assert call_kwargs["avatar_url"] == "mxc://example.com/signal_avatar"
+
+    async def test_whatsapp_portal_resolves_whatsapp_puppet(self):
+        handler, puppet_intent = _make_handler_with_double_puppets()
+        event = _make_message_event("@nick:example.com", WHATSAPP_ROOM, "hello")
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+        call_kwargs = handler._puppet_manager.get_intent.call_args_list[0].kwargs
+        assert call_kwargs["display_name"] == "Nick"
+        assert call_kwargs["avatar_url"] == "mxc://example.com/wa_avatar"
+
+    async def test_non_double_puppet_user_unaffected(self):
+        handler, puppet_intent = _make_handler_with_double_puppets()
+        event = _make_message_event(
+            "@_whatsapp_12345:example.com", WHATSAPP_ROOM, "hi",
+        )
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+        call_kwargs = handler._puppet_manager.get_intent.call_args_list[0].kwargs
+        assert call_kwargs["display_name"] == "Alice"
+
+    async def test_hub_room_not_affected_by_double_puppet(self):
+        """Double puppet resolution only applies in portal rooms."""
+        handler, puppet_intent = _make_handler_with_double_puppets()
+        event = _make_message_event("@nick:example.com", HUB_ROOM, "hello")
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+        # In the hub, should use regular profile ("Nick" from _DEFAULT_PROFILES).
+        call_kwargs = handler._puppet_manager.get_intent.call_args_list[0].kwargs
+        assert call_kwargs["display_name"] == "Nick"
+
+    async def test_puppet_profile_failure_falls_through(self):
+        """If puppet profile lookup fails, fall through to normal resolution."""
+        handler, puppet_intent = _make_handler_with_double_puppets(
+            profiles={SIGNAL_PUPPET_MXID: None},  # simulate failure
+        )
+        event = _make_message_event("@nick:example.com", SIGNAL_ROOM, "hello")
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+        # Falls through to global profile.
+        call_kwargs = handler._puppet_manager.get_intent.call_args_list[0].kwargs
+        assert call_kwargs["display_name"] == "Nick"

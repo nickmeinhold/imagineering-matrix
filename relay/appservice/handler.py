@@ -22,6 +22,7 @@ from .loop_prevention import (
 if TYPE_CHECKING:
     from mautrix.appservice import AppService
 
+    from .config import RelayConfig
     from .event_map import EventMap
     from .puppet import PuppetManager
 
@@ -49,12 +50,14 @@ class RelayHandler:
         portal_rooms: dict[str, str],
         hub_room_id: str,
         event_map: EventMap | None = None,
+        double_puppet_map: dict[str, list[str]] | None = None,
     ) -> None:
         self._appservice = appservice
         self._puppet_manager = puppet_manager
         self._portal_rooms = portal_rooms
         self._hub_room_id = hub_room_id
         self._event_map = event_map
+        self._double_puppet_map = double_puppet_map or {}
         # (sender MXID, room_id|None) -> (display_name, avatar_url, fetched_at)
         self._profile_cache: dict[tuple[str, str | None], tuple[str, str | None, float]] = {}
 
@@ -219,7 +222,11 @@ class RelayHandler:
                 # Plain text message.
                 event_id = await intent.send_text(room_id, text=body)
 
-            log.info("Relayed to %s as %s: %s", room_id, sender, body[:120])
+            log.info(
+                "Relayed to %s as %s (name=%r, avatar=%s): %s",
+                room_id, sender, display_name,
+                "yes" if avatar_url else "no", body[:120],
+            )
             return event_id
         except Exception:
             log.exception("Failed to relay to %s", room_id)
@@ -299,6 +306,44 @@ class RelayHandler:
             pass
         return None
 
+    async def _resolve_double_puppet(
+        self, sender: str, room_id: str,
+    ) -> tuple[str, str | None] | None:
+        """Resolve a double-puppeted user's platform-specific profile.
+
+        For a user like ``@nick:domain`` in a Signal portal room, finds the
+        matching Signal puppet (e.g. ``@signal_uuid:domain``) and returns
+        its display name and avatar.
+
+        The correct puppet is identified by matching the platform prefix
+        of the portal room (e.g. ``signal_``, ``whatsapp_``) against the
+        configured puppet MXIDs.
+        """
+        portal_label = self._portal_rooms[room_id]  # e.g. "Signal", "WhatsApp"
+        prefix = portal_label.lower() + "_"  # e.g. "signal_", "whatsapp_"
+        puppet_mxids = self._double_puppet_map[sender]
+
+        for puppet_mxid in puppet_mxids:
+            localpart = puppet_mxid.split(":")[0].lstrip("@")
+            if not localpart.startswith(prefix):
+                continue
+            try:
+                profile = await self._appservice.intent.get_profile(puppet_mxid)
+                display_name = getattr(profile, "displayname", None) or ""
+                avatar_url = getattr(profile, "avatar_url", None) or None
+                if display_name:
+                    log.info(
+                        "Double puppet resolved %s -> %s: name=%r avatar=%s",
+                        sender, puppet_mxid, display_name,
+                        "yes" if avatar_url else "no",
+                    )
+                    return display_name, avatar_url
+            except Exception:
+                log.debug(
+                    "Double puppet profile lookup failed for %s", puppet_mxid,
+                )
+        return None
+
     async def _get_sender_profile(
         self, sender: str, room_id: str | None = None
     ) -> tuple[str, str | None]:
@@ -324,6 +369,15 @@ class RelayHandler:
             if now - fetched_at < self.PROFILE_CACHE_TTL:
                 return name, avatar
 
+        # Check if this sender is a double-puppeted user in a portal room.
+        # If so, look up the matching puppet's profile for the correct
+        # platform-specific name and avatar.
+        if room_id and room_id in self._portal_rooms and sender in self._double_puppet_map:
+            puppet_profile = await self._resolve_double_puppet(sender, room_id)
+            if puppet_profile:
+                self._profile_cache[cache_key] = (*puppet_profile, now)
+                return puppet_profile
+
         if room_id:
             try:
                 member = await self._appservice.intent.get_state_event(
@@ -331,6 +385,10 @@ class RelayHandler:
                 )
                 display_name = getattr(member, "displayname", None) or ""
                 avatar_url = getattr(member, "avatar_url", None) or None
+                log.debug(
+                    "Member state for %s in %s: name=%r avatar=%s",
+                    sender, room_id, display_name, avatar_url,
+                )
                 if display_name:
                     self._profile_cache[cache_key] = (display_name, avatar_url, now)
                     return display_name, avatar_url
@@ -341,6 +399,10 @@ class RelayHandler:
             profile = await self._appservice.intent.get_profile(sender)
             display_name = getattr(profile, "displayname", None) or ""
             avatar_url = getattr(profile, "avatar_url", None) or None
+            log.debug(
+                "Global profile for %s: name=%r avatar=%s",
+                sender, display_name, avatar_url,
+            )
             if display_name:
                 self._profile_cache[cache_key] = (display_name, avatar_url, now)
                 return display_name, avatar_url
@@ -348,5 +410,6 @@ class RelayHandler:
             log.debug("Profile lookup failed for %s, using localpart", sender)
 
         fallback = sender.split(":")[0].lstrip("@")
+        log.debug("Using MXID fallback for %s: %r", sender, fallback)
         self._profile_cache[cache_key] = (fallback, None, now)
         return fallback, None

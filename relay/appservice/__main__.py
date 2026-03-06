@@ -18,8 +18,11 @@ from .event_map import EventMap
 from .handler import RelayHandler
 from .puppet import PuppetManager
 
+import os
+
+_log_level = os.environ.get("RELAY_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
 log = logging.getLogger("relay")
@@ -55,6 +58,7 @@ async def main() -> None:
         portal_rooms=config.portal_rooms,
         hub_room_id=config.hub_room_id,
         event_map=event_map,
+        double_puppet_map=config.double_puppet_map,
     )
 
     @appservice.matrix_event_handler

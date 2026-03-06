@@ -360,8 +360,28 @@ docker compose up -d relay-bot
 | `HUB_ROOM_ID` | Yes | Hub room ID |
 | `RELAY_BOT_LOCALPART` | No | Bot localpart (default: `relay-bot`) |
 | `RELAY_DB_PATH` | No | SQLite path (default: `/data/relay.db`) |
+| `RELAY_DOUBLE_PUPPETS` | No | Double puppet mapping (see below) |
+| `RELAY_LOG_LEVEL` | No | Log level (default: `INFO`, set `DEBUG` to troubleshoot) |
 
 `RELAY_HOMESERVER_URL` and `RELAY_DOMAIN` are set in `docker-compose.yml` from `MATRIX_SERVER_NAME`.
+
+#### Double puppet mapping
+
+When a bridge-logged-in user sends from a bridged platform (e.g. Signal), the bridge delivers
+the message as their real Matrix account (`@nick:domain`), not a bridge puppet. The relay bot
+would then use their Matrix profile (wrong name/avatar) instead of their platform-specific identity.
+
+`RELAY_DOUBLE_PUPPETS` maps these users to their platform puppet MXIDs so the relay bot
+looks up the correct name and avatar per platform:
+
+```bash
+# Format: user=puppet1,puppet2;user2=puppet3  (localparts, semicolon-separated per user)
+RELAY_DOUBLE_PUPPETS=nick=signal_66eda24c-...,whatsapp_61447591141
+```
+
+Find puppet IDs from bridge databases:
+- Signal: `SELECT mxid, signal_id FROM user_login;` → `signal_<uuid>`
+- WhatsApp: `SELECT mxid, phone FROM user_login;` → `whatsapp_<phone>`
 
 ### Verification
 

@@ -126,3 +126,63 @@ class TestRelayConfigMissingRequired:
         env = {**REQUIRED_ENV, "RELAY_PORTAL_ROOMS": "!wa:example.com"}
         with patch.dict(os.environ, env, clear=False), pytest.raises(SystemExit):
             RelayConfig.from_env()
+
+
+# ---------------------------------------------------------------------------
+# Double puppet mapping
+# ---------------------------------------------------------------------------
+
+
+class TestDoublePuppetParsing:
+    """Parsing of ``RELAY_DOUBLE_PUPPETS`` env var."""
+
+    def test_single_user_single_puppet(self):
+        config = _make_config(RELAY_DOUBLE_PUPPETS="nick=signal_abc123")
+        assert config.double_puppet_map == {
+            "@nick:example.com": ["@signal_abc123:example.com"],
+        }
+
+    def test_single_user_multiple_puppets(self):
+        config = _make_config(
+            RELAY_DOUBLE_PUPPETS="nick=signal_abc123,whatsapp_456",
+        )
+        assert config.double_puppet_map == {
+            "@nick:example.com": [
+                "@signal_abc123:example.com",
+                "@whatsapp_456:example.com",
+            ],
+        }
+
+    def test_multiple_users(self):
+        config = _make_config(
+            RELAY_DOUBLE_PUPPETS="nick=signal_abc;alice=whatsapp_789",
+        )
+        assert config.double_puppet_map == {
+            "@nick:example.com": ["@signal_abc:example.com"],
+            "@alice:example.com": ["@whatsapp_789:example.com"],
+        }
+
+    def test_empty_string_returns_empty_map(self):
+        config = _make_config(RELAY_DOUBLE_PUPPETS="")
+        assert config.double_puppet_map == {}
+
+    def test_unset_returns_empty_map(self):
+        config = _make_config()
+        assert config.double_puppet_map == {}
+
+    def test_malformed_entry_skipped(self):
+        config = _make_config(RELAY_DOUBLE_PUPPETS="badentry;nick=signal_abc")
+        assert config.double_puppet_map == {
+            "@nick:example.com": ["@signal_abc:example.com"],
+        }
+
+    def test_whitespace_trimmed(self):
+        config = _make_config(
+            RELAY_DOUBLE_PUPPETS=" nick = signal_abc , whatsapp_456 ",
+        )
+        assert config.double_puppet_map == {
+            "@nick:example.com": [
+                "@signal_abc:example.com",
+                "@whatsapp_456:example.com",
+            ],
+        }

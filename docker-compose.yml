@@ -76,6 +76,8 @@ services:
       RELAY_PORTAL_ROOMS: ${PORTAL_ROOMS:-}
       RELAY_HUB_ROOM_ID: ${HUB_ROOM_ID}
       RELAY_DB_PATH: /data/relay.db
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-INFO}
+      RELAY_DOUBLE_PUPPETS: ${RELAY_DOUBLE_PUPPETS:-}
     volumes:
       - relay_data:/data
     depends_on:
