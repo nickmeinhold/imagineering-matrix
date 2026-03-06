@@ -111,7 +111,7 @@ class PuppetManager:
                 await intent.set_displayname(display_name)
                 self._display_names[mxid] = display_name
             if self._avatar_urls.get(mxid) != avatar_url:
-                await intent.set_avatar_url(avatar_url or "")
+                await intent.set_avatar_url(avatar_url)
                 self._avatar_urls[mxid] = avatar_url
 
         # Bridges read display names and avatars from the m.room.member
@@ -158,7 +158,7 @@ class PuppetManager:
         content = MemberStateEventContent(
             membership=Membership.JOIN,
             displayname=display_name,
-            avatar_url=avatar_url or "",
+            avatar_url=avatar_url,
         )
         await intent.send_state_event(
             room_id,

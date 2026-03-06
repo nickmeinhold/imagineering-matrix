@@ -273,7 +273,7 @@ class TestFirstJoinProfile:
         assert content["avatar_url"] == "mxc://example.com/avatar"
 
     async def test_first_join_without_avatar(self, manager: PuppetManager):
-        """No avatar URL produces an empty string in the member event."""
+        """No avatar URL passes None (not empty string) in the member event."""
         intent = AsyncMock()
         manager._appservice.intent.user.return_value = intent
 
@@ -286,7 +286,7 @@ class TestFirstJoinProfile:
 
         call = intent.send_state_event.await_args
         content = call.args[2] if len(call.args) > 2 else call.kwargs.get("content")
-        assert content["avatar_url"] == ""
+        assert content["avatar_url"] is None
 
     async def test_each_room_gets_its_own_first_join(self, manager: PuppetManager):
         """Joining two different rooms sends a state event for each."""

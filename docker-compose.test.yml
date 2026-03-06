@@ -1,0 +1,21 @@
+# Test override — swap relay-bot to use test rooms instead of production.
+#
+# Usage:
+#   Deploy test:  ssh pi "cd ~/matrix && docker compose -f docker-compose.yml -f docker-compose.test.yml up -d relay-bot"
+#   Deploy prod:  ssh pi "cd ~/matrix && docker compose up -d relay-bot"
+#
+# Setup (one-time):
+#   1. Create a test Signal group (just you) — bridge auto-creates a portal room
+#   2. Create a test hub room in Element (e.g. "#relay-test:yourdomain.com")
+#   3. Invite the relay bot (@relay-bot:yourdomain.com) to the test hub room
+#   4. Get both room IDs from Element (Room Settings > Advanced > Internal room ID)
+#   5. Fill in the room IDs below
+#   6. Optionally create a test WhatsApp group too and add its portal room
+#
+services:
+  relay-bot:
+    environment:
+      # Override portal rooms and hub for testing.
+      # Replace these with your actual test room IDs.
+      RELAY_PORTAL_ROOMS: "${TEST_PORTAL_ROOMS}"
+      RELAY_HUB_ROOM_ID: "${TEST_HUB_ROOM_ID}"
