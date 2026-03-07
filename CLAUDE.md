@@ -377,6 +377,15 @@ Find puppet IDs from bridge databases:
 6. Send from Element — appears on all bridged platforms
 7. No message loops or duplicate messages
 
+## Next Steps
+
+Superbridge is fully operational (2026-03-06). All 5 platforms connected bidirectionally. Remaining work:
+
+- [ ] **Test more scenarios** — replies across platforms, reactions, media (images/files/voice)
+- [ ] **Invite real users** — test with multiple people, verify display names and avatars look right for everyone
+- [ ] **Polish** — display names, avatars, formatting quirks (e.g. Telegram relaybot name via BotFather)
+- [ ] **Document the working setup** — write up for the Meetup group so new members can join on any platform
+
 ## Limitations vs Synapse
 
 - No SSO/OIDC support
