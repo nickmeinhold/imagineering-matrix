@@ -16,6 +16,12 @@ namespaces:
   users:
     - exclusive: true
       regex: "@_relay_.*:CHANGE_ME_DOMAIN"
+    # Allow impersonating double-puppeted users for reactions.
+    # Bridges only forward reactions from logged-in users, so the relay bot
+    # sends reactions as the double-puppeted user (non-exclusive to avoid
+    # conflicts with the bridge appservices that also impersonate this user).
+    - exclusive: false
+      regex: "@nick:CHANGE_ME_DOMAIN"
   aliases: []
   rooms: []
 rate_limited: false

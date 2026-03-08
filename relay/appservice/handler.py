@@ -236,7 +236,12 @@ class RelayHandler:
         """Relay a reaction event to all other rooms.
 
         Looks up the reacted-to event in the event map and sends the same
-        reaction via a puppet intent in each target room.
+        reaction in each target room.
+
+        For portal rooms, reactions are sent as a double-puppeted user (e.g.
+        Nick) rather than a relay puppet.  Bridge relay modes only forward
+        reactions from logged-in users — puppet reactions are silently dropped.
+        For the hub room, puppet intents are used so the correct identity shows.
         """
         if not self._event_map:
             return
@@ -279,14 +284,21 @@ class RelayHandler:
             if not mapped_event:
                 continue
             try:
-                intent = await self._puppet_manager.get_intent(
-                    platform=platform,
-                    sender=sender,
-                    display_name=display_name,
-                    avatar_url=avatar_url,
-                    room_id=target_room,
-                    sync_member_state=(target_room == self._hub_room_id),
-                )
+                # Portal rooms: use a double-puppeted user's intent so bridges
+                # accept the reaction (they ignore relay puppet reactions).
+                # Hub room: use puppet intent for correct identity display.
+                if target_room in self._portal_rooms and self._double_puppet_map:
+                    proxy_user = next(iter(self._double_puppet_map))
+                    intent = self._appservice.intent.user(proxy_user)
+                else:
+                    intent = await self._puppet_manager.get_intent(
+                        platform=platform,
+                        sender=sender,
+                        display_name=display_name,
+                        avatar_url=avatar_url,
+                        room_id=target_room,
+                        sync_member_state=(target_room == self._hub_room_id),
+                    )
                 await intent.react(target_room, mapped_event, reaction_key)
                 log.info(
                     "Relayed reaction %s to %s in %s",

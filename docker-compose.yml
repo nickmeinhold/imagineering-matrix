@@ -41,6 +41,8 @@ services:
   mautrix-discord:
     image: dock.mau.dev/mautrix/discord:latest
     restart: always
+    ports:
+      - "29334:29334"  # Avatar proxy for Discord relay webhooks
     volumes:
       - discord_data:/data
     depends_on:

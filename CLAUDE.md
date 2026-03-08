@@ -381,10 +381,16 @@ Find puppet IDs from bridge databases:
 
 Superbridge is fully operational (2026-03-06). All 5 platforms connected bidirectionally. Remaining work:
 
-- [ ] **Test more scenarios** — replies across platforms, reactions, media (images/files/voice)
+- [x] **Test more scenarios** — replies across platforms, reactions, media (images/files/voice)
+  - [x] Replies: WhatsApp ✅, Discord ✅, Signal (source) ✅, Telegram ❌ (bridge limitation)
+  - [x] Reactions: Discord→Telegram ✅ (direct), Discord→Signal/WhatsApp ❌ (needs appservice re-registration)
+  - [ ] Media: images, files, voice messages (untested)
+- [ ] **Fix reactions to Signal/WhatsApp** — re-register relay appservice with `@nick` in namespace (paste in `#admins` room)
 - [ ] **Invite real users** — test with multiple people, verify display names and avatars look right for everyone
-- [ ] **Polish** — display names, avatars, formatting quirks (e.g. Telegram relaybot name via BotFather)
-- [ ] **Document the working setup** — write up for the Meetup group so new members can join on any platform
+- [x] **Polish** — display names, avatars, formatting quirks
+  - [x] Telegram relaybot: removed distinguisher squares, bot name set to `•`, avatar set via BotFather
+  - [x] Discord relay avatars: exposed bridge port 29334, added Caddy `/mautrix-discord/*` route for avatar proxy
+- [x] **Document the working setup** — `JOINING.md` for Meetup members (fill in invite links before sharing)
 
 ## Limitations vs Synapse
 
