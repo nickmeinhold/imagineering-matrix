@@ -7,6 +7,7 @@ via event ID mapping.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -75,7 +76,7 @@ class RelayHandler:
         sender: str = event.sender
         body: str = event.content.body or ""
         bot_mxid: str = self._appservice.bot_mxid
-        is_media = self._is_media(event)
+        is_media = self._is_media_content(event.content)
 
         # An event with no body AND no media URL has nothing to relay.
         if not body and not is_media:
@@ -211,11 +212,14 @@ class RelayHandler:
             is_media = self._is_media_content(content)
 
             if is_media:
-                # Media: forward the content object directly, preserving
-                # mxc:// URL, info (dimensions, mimetype, size), etc.
+                # Media: forward the content object, preserving mxc:// URL,
+                # info (dimensions, mimetype, size), etc.  Shallow-copy so
+                # that set_reply doesn't mutate the original (which is shared
+                # across multiple target rooms).
+                send_content = copy.copy(content) if mapped_reply_to else content
                 if mapped_reply_to:
-                    content.set_reply(mapped_reply_to)
-                event_id = await intent.send_message(room_id, content)
+                    send_content.set_reply(mapped_reply_to)
+                event_id = await intent.send_message(room_id, send_content)
             elif mapped_reply_to:
                 # Text reply: build a TextMessageEventContent with m.in_reply_to.
                 from mautrix.types import (
@@ -245,17 +249,8 @@ class RelayHandler:
             return None
 
     @staticmethod
-    def _is_media(event) -> bool:
-        """Check whether an event is a media message (image, video, file, audio)."""
-        try:
-            msgtype = event.content.msgtype.value
-            return msgtype in ("m.image", "m.video", "m.file", "m.audio")
-        except (AttributeError, TypeError):
-            return False
-
-    @staticmethod
     def _is_media_content(content) -> bool:
-        """Check whether a content object is a media type."""
+        """Check whether a content object is a media type (image, video, file, audio)."""
         try:
             return content.msgtype.value in ("m.image", "m.video", "m.file", "m.audio")
         except (AttributeError, TypeError):
