@@ -6,8 +6,10 @@ Continuwuity is a Rust-based Matrix homeserver, community fork of conduwuit (arc
 
 ## Target Deployment
 
-GCP e2-medium (`34.40.229.206`) — colocated with other imagineering.cc services.
-Previously ran on Raspberry Pi 4 (8 GB), migrated to GCP for public HTTPS and reliability.
+Oracle OCI (4 CPU, 24 GB RAM) — migrated from GCP e2-medium (`34.40.229.206`) for more resources.
+Previously: Raspberry Pi 4 → GCP e2-medium → OCI.
+
+Migration script: `migrate-to-oci.sh` (modeled on `migrate-to-gcp.sh`).
 
 ## Requirements
 
@@ -67,9 +69,9 @@ Then `docker compose up -d` to apply.
 
 ## Deployment
 
-Deployed via the `imagineering-infra` repo's deploy script. Secrets are SOPS-encrypted in `imagineering-infra/matrix/secrets.yaml`.
+Deployed via `imagineering-infra` repo. Secrets are SOPS-encrypted in `imagineering-infra/matrix/secrets.yaml`.
 
-**GCP instance:** `34.40.229.206` (nick@)
+**OCI instance:** `159.13.42.73` (nick@)
 **Remote path:** `~/apps/matrix/`
 **Public URL:** `https://matrix.imagineering.cc`
 
@@ -77,7 +79,7 @@ Deployed via the `imagineering-infra` repo's deploy script. Secrets are SOPS-enc
 
 ```bash
 # From imagineering-infra repo
-./scripts/deploy-to.sh 34.40.229.206 matrix
+./scripts/deploy-to.sh 159.13.42.73 matrix
 ```
 
 This decrypts secrets, generates `.env`, rsyncs files (including relay bot source from this repo), builds the relay bot container, and restarts services.
@@ -87,22 +89,26 @@ This decrypts secrets, generates `.env`, rsyncs files (including relay bot sourc
 When relay puppets need re-creation (stale profiles, corrupt DB), clear the data volume:
 
 ```bash
-ssh nick@34.40.229.206 "cd ~/apps/matrix && docker compose rm -f relay-bot && docker volume rm matrix_relay_data && docker compose up -d"
+ssh nick@159.13.42.73 "cd ~/apps/matrix && docker compose rm -f relay-bot && docker volume rm matrix_relay_data && docker compose up -d"
 ```
 
 The `rm -f` is required before `volume rm` — Docker won't remove a volume still attached to a stopped container.
 
 ## Caddy Config
 
-Managed in `imagineering-infra/caddy/Caddyfile`:
+Managed in `imagineering-infra/caddy/Caddyfile`. Caddy runs as a Docker container on the OCI instance.
 
-```
-matrix.imagineering.cc {
-    reverse_proxy localhost:8008
-}
+Caddy provides automatic HTTPS via Let's Encrypt. Federation is enabled and uses `.well-known` delegation on `imagineering.cc` to route to `matrix.imagineering.cc:443`.
+
+### Previous GCP deployment
+
+GCP instance (`34.40.229.206`) is retained as fallback. To restore:
+
+```bash
+ssh nick@34.40.229.206 "cd ~/apps/matrix && docker compose up -d"
 ```
 
-Caddy provides automatic HTTPS via Let's Encrypt. Federation is currently disabled (`CONTINUWUITY_ALLOW_FEDERATION=false`).
+Update DNS back to `34.40.229.206` if needed.
 
 ## Bridges
 
@@ -248,7 +254,7 @@ Users who've logged into a bridge get full puppeting (messages appear as them). 
 - **Message loops**: Each bridge only relays messages from non-native users. If you see echoes, check that relay mode is configured correctly.
 - **Power levels**: Bridge bots need PL 50+ in the hub room. Use `./superbridge.sh invite-bots` or set manually in Element room settings.
 - **Continuwuity bug**: Original Conduit had a bug where puppet users couldn't join rooms. Continuwuity may have fixed this — if plumbing fails, check Continuwuity issue tracker.
-- **State file**: Superbridge state (room ID, access token) stored on GCP at `~/apps/matrix/.superbridge-state`.
+- **State file**: Superbridge state (room ID, access token) stored on the server at `~/apps/matrix/.superbridge-state`.
 
 ### Relay Appservice (Puppet-Based)
 
