@@ -9,8 +9,6 @@ Continuwuity is a Rust-based Matrix homeserver, community fork of conduwuit (arc
 Oracle OCI (4 CPU, 24 GB RAM) — migrated from GCP e2-medium (`34.40.229.206`) for more resources.
 Previously: Raspberry Pi 4 → GCP e2-medium → OCI.
 
-Migration script: `migrate-to-oci.sh` (modeled on `migrate-to-gcp.sh`).
-
 ## Requirements
 
 - Domain pointing to server (server name is permanent — cannot migrate later)
@@ -71,7 +69,7 @@ Then `docker compose up -d` to apply.
 
 Deployed via `imagineering-infra` repo. Secrets are SOPS-encrypted in `imagineering-infra/matrix/secrets.yaml`.
 
-**OCI instance:** `159.13.42.73` (nick@)
+**OCI instance:** `149.118.69.221` (nick@)
 **Remote path:** `~/apps/matrix/`
 **Public URL:** `https://matrix.imagineering.cc`
 
@@ -79,7 +77,7 @@ Deployed via `imagineering-infra` repo. Secrets are SOPS-encrypted in `imagineer
 
 ```bash
 # From imagineering-infra repo
-./scripts/deploy-to.sh 159.13.42.73 matrix
+./scripts/deploy-to.sh 149.118.69.221 matrix
 ```
 
 This decrypts secrets, generates `.env`, rsyncs files (including relay bot source from this repo), builds the relay bot container, and restarts services.
@@ -89,7 +87,7 @@ This decrypts secrets, generates `.env`, rsyncs files (including relay bot sourc
 When relay puppets need re-creation (stale profiles, corrupt DB), clear the data volume:
 
 ```bash
-ssh nick@159.13.42.73 "cd ~/apps/matrix && docker compose rm -f relay-bot && docker volume rm matrix_relay_data && docker compose up -d"
+ssh nick@149.118.69.221 "cd ~/apps/matrix && docker compose rm -f relay-bot && docker volume rm matrix_relay_data && docker compose up -d"
 ```
 
 The `rm -f` is required before `volume rm` — Docker won't remove a volume still attached to a stopped container.
@@ -390,7 +388,7 @@ Superbridge is fully operational (2026-03-06). All 5 platforms connected bidirec
 - [x] **Test more scenarios** — replies across platforms, reactions, media (images/files/voice)
   - [x] Replies: WhatsApp ✅, Discord ✅, Signal (source) ✅, Telegram ❌ (bridge limitation)
   - [x] Reactions: Discord→Telegram ✅ (direct), Discord→Signal/WhatsApp ❌ (needs appservice re-registration)
-  - [ ] Media: images, files, voice messages (untested)
+  - [x] Media: relay bot forwards images, files, video, audio via content passthrough (2026-03-26)
 - [ ] **Fix reactions to Signal/WhatsApp** — re-register relay appservice with `@nick` in namespace (paste in `#admins` room)
 - [ ] **Invite real users** — test with multiple people, verify display names and avatars look right for everyone
 - [x] **Polish** — display names, avatars, formatting quirks
