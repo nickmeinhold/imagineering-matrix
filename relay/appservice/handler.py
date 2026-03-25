@@ -69,15 +69,16 @@ class RelayHandler:
         """Route a message event to the appropriate targets.
 
         Handles portal->hub, hub->portals, and portal->portal cross-relay.
+        Supports both text messages and media (images, files, video, audio).
         """
         room_id: str = event.room_id
         sender: str = event.sender
         body: str = event.content.body or ""
         bot_mxid: str = self._appservice.bot_mxid
+        is_media = self._is_media(event)
 
-        if not body:
-            # Media-only messages (images, stickers) have no text body.
-            # Nothing to relay as text — skip silently.
+        # An event with no body AND no media URL has nothing to relay.
+        if not body and not is_media:
             return
 
         if room_id in self._portal_rooms:
@@ -100,7 +101,6 @@ class RelayHandler:
         """Relay a portal message to the hub and to other portal rooms."""
         sender: str = event.sender
         room_id: str = event.room_id
-        body: str = event.content.body or ""
         source_event_id: str = event.event_id
         display_name, avatar_url = await self._get_sender_profile(sender, room_id)
         source_label = self._portal_rooms[room_id]
@@ -114,7 +114,7 @@ class RelayHandler:
             display_name=display_name,
             avatar_url=avatar_url,
             room_id=self._hub_room_id,
-            body=body,
+            content=event.content,
             reply_to_source=reply_to,
             target_room_id=self._hub_room_id,
         )
@@ -133,7 +133,7 @@ class RelayHandler:
                 display_name=display_name,
                 avatar_url=avatar_url,
                 room_id=portal_id,
-                body=body,
+                content=event.content,
                 reply_to_source=reply_to,
                 target_room_id=portal_id,
             )
@@ -145,7 +145,6 @@ class RelayHandler:
     async def _relay_from_hub(self, event) -> None:
         """Fan out a hub message to all portal rooms."""
         sender: str = event.sender
-        body: str = event.content.body or ""
         source_event_id: str = event.event_id
         room_id: str = event.room_id
         display_name, avatar_url = await self._get_sender_profile(sender, room_id)
@@ -159,7 +158,7 @@ class RelayHandler:
                 display_name=display_name,
                 avatar_url=avatar_url,
                 room_id=portal_id,
-                body=body,
+                content=event.content,
                 reply_to_source=reply_to,
                 target_room_id=portal_id,
             )
@@ -176,11 +175,16 @@ class RelayHandler:
         display_name: str,
         avatar_url: str | None = None,
         room_id: str,
-        body: str,
+        content,
         reply_to_source: str | None = None,
         target_room_id: str | None = None,
     ) -> str | None:
-        """Send *body* to *room_id* via a puppet intent.
+        """Send a message to *room_id* via a puppet intent.
+
+        *content* is the original mautrix message content object.  For text
+        messages this is a :class:`TextMessageEventContent`; for media it is
+        a :class:`MediaMessageEventContent`.  The content is forwarded as-is,
+        preserving ``mxc://`` URLs, thumbnails, dimensions, and other metadata.
 
         If *reply_to_source* is set and a mapping exists in the event map,
         the message is sent as a reply with ``m.in_reply_to``.
@@ -204,33 +208,58 @@ class RelayHandler:
                     reply_to_source, target_room_id,
                 )
 
-            if mapped_reply_to:
-                # Send as reply with m.in_reply_to.
+            is_media = self._is_media_content(content)
+
+            if is_media:
+                # Media: forward the content object directly, preserving
+                # mxc:// URL, info (dimensions, mimetype, size), etc.
+                if mapped_reply_to:
+                    content.set_reply(mapped_reply_to)
+                event_id = await intent.send_message(room_id, content)
+            elif mapped_reply_to:
+                # Text reply: build a TextMessageEventContent with m.in_reply_to.
                 from mautrix.types import (
                     TextMessageEventContent,
                     MessageType,
-                    RelatesTo,
-                    InReplyTo,
                 )
-                content = TextMessageEventContent(
+                body = content.body or ""
+                reply_content = TextMessageEventContent(
                     msgtype=MessageType.TEXT,
                     body=body,
                 )
-                content.set_reply(mapped_reply_to)
-                event_id = await intent.send_message(room_id, content)
+                reply_content.set_reply(mapped_reply_to)
+                event_id = await intent.send_message(room_id, reply_content)
             else:
                 # Plain text message.
-                event_id = await intent.send_text(room_id, text=body)
+                event_id = await intent.send_text(room_id, text=content.body or "")
 
+            body_preview = content.body or f"[{content.msgtype.value}]"
             log.info(
                 "Relayed to %s as %s (name=%r, avatar=%s): %s",
                 room_id, sender, display_name,
-                "yes" if avatar_url else "no", body[:120],
+                "yes" if avatar_url else "no", body_preview[:120],
             )
             return event_id
         except Exception:
             log.exception("Failed to relay to %s", room_id)
             return None
+
+    @staticmethod
+    def _is_media(event) -> bool:
+        """Check whether an event is a media message (image, video, file, audio)."""
+        try:
+            msgtype = event.content.msgtype.value
+            return msgtype in ("m.image", "m.video", "m.file", "m.audio")
+        except (AttributeError, TypeError):
+            return False
+
+    @staticmethod
+    def _is_media_content(content) -> bool:
+        """Check whether a content object is a media type."""
+        try:
+            return content.msgtype.value in ("m.image", "m.video", "m.file", "m.audio")
+        except (AttributeError, TypeError):
+            return False
 
     async def handle_reaction(self, event) -> None:
         """Relay a reaction event to all other rooms.

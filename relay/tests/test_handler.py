@@ -60,6 +60,38 @@ def _make_message_event(
     return event
 
 
+def _make_media_event(
+    sender: str,
+    room_id: str,
+    msgtype: str = "m.image",
+    url: str = "mxc://example.com/media123",
+    body: str = "",
+    event_id: str = "$media_evt1",
+) -> MagicMock:
+    """Build a mock mautrix media MessageEvent (image, file, video, audio).
+
+    Media events have a ``url`` field with an ``mxc://`` URI and typically
+    an empty or filename-only ``body``.  The ``msgtype`` distinguishes the
+    media type (``m.image``, ``m.video``, ``m.file``, ``m.audio``).
+    """
+    event = MagicMock()
+    event.sender = sender
+    event.room_id = room_id
+    event.event_id = event_id
+
+    event.content.msgtype.value = msgtype
+    event.content.body = body or ""
+    event.content.url = url
+    event.content.info = MagicMock()
+    event.content.info.mimetype = "image/png"
+    event.content.info.size = 12345
+    event.content.relates_to = None
+    # Media events support set_reply just like text
+    event.content.set_reply = MagicMock()
+
+    return event
+
+
 def _make_profile(displayname: str, avatar_url: str | None = None) -> MagicMock:
     """Build a mock profile response."""
     profile = MagicMock()
@@ -108,6 +140,7 @@ def _make_handler(
     puppet_manager = AsyncMock()
     puppet_intent = AsyncMock()
     puppet_intent.send_text = AsyncMock(return_value="$relayed_evt")
+    puppet_intent.send_message = AsyncMock(return_value="$relayed_media_evt")
     puppet_manager.get_intent.return_value = puppet_intent
 
     handler = RelayHandler(
@@ -533,37 +566,157 @@ class TestMemberStateScoping:
 
 
 # ---------------------------------------------------------------------------
-# Media / empty body handling
+# Media relay
 # ---------------------------------------------------------------------------
 
 
-class TestMediaMessages:
-    """Messages with no text body (images, stickers) are handled gracefully."""
+class TestMediaRelay:
+    """Images, files, and other media are relayed between rooms."""
 
-    async def test_none_body_skipped(self, handler, puppet_intent):
-        """Image-only messages with body=None should not crash."""
-        event = _make_message_event(
+    async def test_image_from_portal_relayed_to_hub(self, handler, puppet_intent):
+        """An image in a portal room is forwarded to the hub."""
+        event = _make_media_event(
             sender="@_whatsapp_12345:example.com",
             room_id=WHATSAPP_ROOM,
-            body="placeholder",
+        )
+
+        await handler.handle_message(event)
+
+        # Media should be sent via send_message (not send_text).
+        hub_calls = [
+            c for c in puppet_intent.send_message.await_args_list
+            if c.args and c.args[0] == HUB_ROOM
+        ]
+        assert len(hub_calls) >= 1
+
+    async def test_image_from_portal_cross_relayed(self, handler, puppet_intent):
+        """An image in one portal is cross-relayed to other portals."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+        )
+
+        await handler.handle_message(event)
+
+        target_rooms = set()
+        for call in puppet_intent.send_message.await_args_list:
+            if call.args:
+                target_rooms.add(call.args[0])
+        assert SIGNAL_ROOM in target_rooms
+
+    async def test_image_from_hub_fans_out_to_portals(self, handler, puppet_intent):
+        """An image in the hub is fanned out to all portals."""
+        event = _make_media_event(
+            sender="@nick:example.com",
+            room_id=HUB_ROOM,
+        )
+
+        await handler.handle_message(event)
+
+        target_rooms = set()
+        for call in puppet_intent.send_message.await_args_list:
+            if call.args:
+                target_rooms.add(call.args[0])
+        assert WHATSAPP_ROOM in target_rooms
+        assert SIGNAL_ROOM in target_rooms
+
+    async def test_media_content_passed_through(self, handler, puppet_intent):
+        """The original event content object is forwarded (preserving url, info)."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            url="mxc://example.com/photo456",
+        )
+
+        await handler.handle_message(event)
+
+        # The content passed to send_message should be the event's content.
+        call = puppet_intent.send_message.await_args_list[0]
+        content_arg = call.args[1]
+        assert content_arg is event.content
+
+    async def test_media_with_none_body_relayed(self, handler, puppet_intent):
+        """Media events with body=None are still relayed (not skipped)."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
         )
         event.content.body = None
 
         await handler.handle_message(event)
 
-        puppet_intent.send_text.assert_not_awaited()
+        assert puppet_intent.send_message.await_count > 0
 
-    async def test_empty_body_skipped(self, handler, puppet_intent):
-        """Messages with empty string body should not relay."""
-        event = _make_message_event(
-            sender="@_whatsapp_12345:example.com",
+    async def test_media_loop_prevention(self, handler, puppet_intent):
+        """Loop prevention still applies to media messages."""
+        event = _make_media_event(
+            sender=BOT_MXID,
             room_id=WHATSAPP_ROOM,
-            body="",
         )
 
         await handler.handle_message(event)
 
+        puppet_intent.send_message.assert_not_awaited()
         puppet_intent.send_text.assert_not_awaited()
+
+    async def test_media_relay_puppet_ignored(self, handler, puppet_intent):
+        """Relay puppet media messages are ignored (loop prevention)."""
+        event = _make_media_event(
+            sender="@_relay_whatsapp_abc12345:example.com",
+            room_id=WHATSAPP_ROOM,
+        )
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_message.assert_not_awaited()
+
+    async def test_text_still_uses_send_text(self, handler, puppet_intent):
+        """Plain text messages continue using send_text (no regression)."""
+        event = _make_message_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            body="hello text",
+        )
+
+        await handler.handle_message(event)
+
+        puppet_intent.send_text.assert_awaited()
+
+    async def test_video_relayed(self, handler, puppet_intent):
+        """Video messages are relayed just like images."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            msgtype="m.video",
+        )
+
+        await handler.handle_message(event)
+
+        assert puppet_intent.send_message.await_count > 0
+
+    async def test_file_relayed(self, handler, puppet_intent):
+        """File messages are relayed just like images."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            msgtype="m.file",
+        )
+
+        await handler.handle_message(event)
+
+        assert puppet_intent.send_message.await_count > 0
+
+    async def test_audio_relayed(self, handler, puppet_intent):
+        """Audio/voice messages are relayed just like images."""
+        event = _make_media_event(
+            sender="@_whatsapp_12345:example.com",
+            room_id=WHATSAPP_ROOM,
+            msgtype="m.audio",
+        )
+
+        await handler.handle_message(event)
+
+        assert puppet_intent.send_message.await_count > 0
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +795,7 @@ def _make_handler_with_double_puppets(
     puppet_manager = AsyncMock()
     puppet_intent = AsyncMock()
     puppet_intent.send_text = AsyncMock(return_value="$relayed_evt")
+    puppet_intent.send_message = AsyncMock(return_value="$relayed_media_evt")
     puppet_manager.get_intent.return_value = puppet_intent
 
     handler = RelayHandler(
